@@ -1,0 +1,37 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux
+            artifact: linux-amd64
+          - os: ubuntu-latest
+            target: windows
+            artifact: windows-amd64
+          - os: macos-latest
+            target: darwin-arm64
+            artifact: darwin-arm64
+          - os: macos-13
+            target: darwin-amd64
+            artifact: darwin-amd64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - if: matrix.target == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev
+      - run: make ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ariranha-${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
