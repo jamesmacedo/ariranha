@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS photos (
 	orientation INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS favorites (
+	path  TEXT    PRIMARY KEY,
+	added INTEGER NOT NULL
+) WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS face_scans (
 	path  TEXT    PRIMARY KEY,
 	size  INTEGER NOT NULL,
@@ -278,7 +283,7 @@ func (s *Store) SaveFaces(k Key, faces []*Face) error {
 }
 
 func (s *Store) LoadPhotos(root string) ([]*gallery.Photo, error) {
-	rows, err := s.db.Query(`SELECT id, path, size, mtime, taken, width, height, orientation FROM photos`)
+	rows, err := s.db.Query(`SELECT p.id, p.path, p.size, p.mtime, p.taken, p.width, p.height, p.orientation, f.path IS NOT NULL FROM photos p LEFT JOIN favorites f ON f.path = p.path`)
 	if err != nil {
 		return nil, err
 	}
@@ -288,7 +293,7 @@ func (s *Store) LoadPhotos(root string) ([]*gallery.Photo, error) {
 	for rows.Next() {
 		p := &gallery.Photo{Color: gallery.LoadingColor}
 		var mtime, taken int64
-		if err := rows.Scan(&p.ID, &p.Rel, &p.Size, &mtime, &taken, &p.Width, &p.Height, &p.Orientation); err != nil {
+		if err := rows.Scan(&p.ID, &p.Rel, &p.Size, &mtime, &taken, &p.Width, &p.Height, &p.Orientation, &p.Favorite); err != nil {
 			return nil, err
 		}
 		p.Path = filepath.Join(root, filepath.FromSlash(p.Rel))
@@ -324,6 +329,15 @@ func (s *Store) SavePhotos(photos []*gallery.Photo) error {
 	return tx.Commit()
 }
 
+func (s *Store) SetFavorite(rel string, fav bool) error {
+	if fav {
+		_, err := s.db.Exec(`INSERT INTO favorites (path, added) VALUES (?, ?) ON CONFLICT(path) DO NOTHING`, rel, time.Now().UnixNano())
+		return err
+	}
+	_, err := s.db.Exec(`DELETE FROM favorites WHERE path = ?`, rel)
+	return err
+}
+
 func (s *Store) DeletePhotos(rels []string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -336,6 +350,7 @@ func (s *Store) DeletePhotos(rels []string) error {
 			`DELETE FROM embeddings WHERE path = ?`,
 			`DELETE FROM faces WHERE path = ?`,
 			`DELETE FROM face_scans WHERE path = ?`,
+			`DELETE FROM favorites WHERE path = ?`,
 		} {
 			if _, err := tx.Exec(q, rel); err != nil {
 				return err

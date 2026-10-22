@@ -16,6 +16,7 @@ type Paths struct {
 	ModelName  string
 	VisionFile string
 	TextFile   string
+	Trash      string
 }
 
 const (

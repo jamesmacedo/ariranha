@@ -229,6 +229,10 @@ func (c *ThumbCache) Prefetch(p *Photo) {
 	c.request(p)
 }
 
+func (c *ThumbCache) SetUploadLimit(n int) {
+	c.uploadLimit = n
+}
+
 func (c *ThumbCache) Stats() (ramMB float64, ramCount, gpuCount int) {
 	return float64(c.ramBytes) / (1 << 20), len(c.ram), len(c.gpu)
 }

@@ -31,6 +31,7 @@ type Photo struct {
 	Width       int
 	Height      int
 	Orientation int
+	Favorite    bool
 	Color       color.RGBA
 }
 

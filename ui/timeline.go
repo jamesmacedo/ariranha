@@ -40,6 +40,8 @@ type Timeline struct {
 	EmptyText   string
 	KeysEnabled bool
 	BottomInset float32
+	Obstacle    rl.Rectangle
+	OnOpen      func(photos []*gallery.Photo, index int)
 
 	theme   *Theme
 	section string
@@ -56,11 +58,13 @@ type Timeline struct {
 	dragOffset float32
 	direction  int
 	hover      int
+	armed      int
+	pressY     float32
 	scrub      scrubber
 }
 
 func NewTimeline(theme *Theme, thumbs *gallery.ThumbCache) *Timeline {
-	return &Timeline{theme: theme, thumbs: thumbs, hover: -1, laidOut: -1, KeysEnabled: true}
+	return &Timeline{theme: theme, thumbs: thumbs, hover: -1, armed: -1, laidOut: -1, KeysEnabled: true}
 }
 
 func (t *Timeline) SetPhotos(title string, photos []*gallery.Photo) {
@@ -74,6 +78,34 @@ func (t *Timeline) SetResults(title, section string, photos []*gallery.Photo) {
 func (t *Timeline) Refresh(photos []*gallery.Photo) {
 	t.photos = photos
 	t.laidOut = -1
+}
+
+func (t *Timeline) Remove(p *gallery.Photo) {
+	for i, q := range t.photos {
+		if q == p {
+			t.photos = append(append([]*gallery.Photo(nil), t.photos[:i]...), t.photos[i+1:]...)
+			t.laidOut = -1
+			return
+		}
+	}
+}
+
+func (t *Timeline) Reveal(p *gallery.Photo, bounds rl.Rectangle) {
+	v := t.view(bounds)
+	for _, tl := range t.tiles {
+		if tl.photo != p {
+			continue
+		}
+		if tl.rect.Y < t.target || tl.rect.Y+tl.rect.Height > t.target+v.Height-t.BottomInset {
+			t.target = clamp(tl.rect.Y-v.Height/3, 0, t.maxScroll(v))
+			t.scroll = t.target
+		}
+		return
+	}
+}
+
+func (t *Timeline) TileHovered() bool {
+	return t.hover >= 0
 }
 
 func (t *Timeline) set(title, section string, photos []*gallery.Photo) {
@@ -284,7 +316,7 @@ func (t *Timeline) Update(bounds rl.Rectangle) {
 	}
 
 	t.hover = -1
-	if inside && !t.dragging && !rl.CheckCollisionPointRec(mouse, t.track(v)) {
+	if inside && !t.dragging && !t.scrub.dragging && !rl.CheckCollisionPointRec(mouse, t.track(v)) && !rl.CheckCollisionPointRec(mouse, t.Obstacle) {
 		local := rl.NewVector2(mouse.X-v.X, mouse.Y-v.Y+t.scroll)
 		first, last := t.visible(t.scroll, t.scroll+v.Height)
 		for i := first; i < last; i++ {
@@ -293,6 +325,24 @@ func (t *Timeline) Update(bounds rl.Rectangle) {
 				break
 			}
 		}
+	}
+
+	if rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
+		t.armed = t.hover
+		t.pressY = mouse.Y + t.scroll
+	}
+	if rl.IsMouseButtonReleased(rl.MouseButtonLeft) {
+		moved := math.Abs(float64(mouse.Y+t.scroll-t.pressY)) > 6
+		if t.armed >= 0 && t.armed == t.hover && !moved && t.OnOpen != nil {
+			p := t.tiles[t.armed].photo
+			for i, q := range t.photos {
+				if q == p {
+					t.OnOpen(t.photos, i)
+					break
+				}
+			}
+		}
+		t.armed = -1
 	}
 }
 

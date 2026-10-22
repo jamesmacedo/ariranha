@@ -21,7 +21,7 @@ ORT_DARWIN := lib/darwin-arm64/libonnxruntime.dylib
 PACKAGED_MODELS := $(MODELS) $(FACE_MODELS)
 
 define layout
-	mkdir -p $(1)/storage $(1)/system/models $(1)/system/runtime $(1)/system/db $(1)/system/cache $(1)/system/logs
+	mkdir -p $(1)/storage $(1)/system/models $(1)/system/runtime $(1)/system/db $(1)/system/cache $(1)/system/logs $(1)/system/trash
 	for f in $(PACKAGED_MODELS); do cp -lf $$f $(1)/system/models/ 2>/dev/null || cp -f $$f $(1)/system/models/; done
 	cp -f $(2) $(1)/system/runtime/
 	rm -f $(1)/libonnxruntime.so $(1)/onnxruntime.dll $(1)/libonnxruntime.dylib

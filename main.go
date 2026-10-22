@@ -93,7 +93,9 @@ func main() {
 	thumbs := gallery.NewThumbCache(360, 400, 256<<20)
 	defer thumbs.Close()
 
-	finder := search.Start(dirs.Storage, search.NewPaths(dirs.Models, dirs.Runtime, dirs.Database()))
+	paths := search.NewPaths(dirs.Models, dirs.Runtime, dirs.Database())
+	paths.Trash = dirs.Trash
+	finder := search.Start(dirs.Storage, paths)
 	defer finder.Close()
 	libVersion := finder.LibraryVersion()
 	lib := finder.Library()
@@ -118,6 +120,34 @@ func main() {
 	input.Hint = "Ctrl K"
 	nav := ui.NewNavBar(theme, input)
 	searching := false
+
+	viewer := ui.NewViewer(theme, thumbs)
+	defer viewer.Unload()
+	viewer.Avatars = people
+	viewer.OnFavorite = finder.SetFavorite
+	viewer.OnDelete = func(p *gallery.Photo) error {
+		if err := finder.Trash(p); err != nil {
+			return err
+		}
+		log.Printf("lixeira: %s", p.Rel)
+		timeline.Remove(p)
+		return nil
+	}
+	viewer.PeopleOf = func(p *gallery.Photo) []search.PersonInfo {
+		var out []search.PersonInfo
+		for _, pi := range people.People {
+			for _, rel := range pi.Paths {
+				if rel == p.Rel {
+					out = append(out, pi)
+					break
+				}
+			}
+		}
+		return out
+	}
+	timeline.OnOpen = viewer.Show
+	var reveal *gallery.Photo
+	viewer.OnClose = func(p *gallery.Photo) { reveal = p }
 
 	personName := func(p search.PersonInfo) string {
 		if p.Name != "" {
@@ -286,6 +316,24 @@ func main() {
 			input.Placeholder = "Search unavailable"
 		}
 
+		if viewer.Open {
+			viewer.Update(screen)
+		}
+		if viewer.Open {
+			if viewer.Hovered() {
+				rl.SetMouseCursor(rl.MouseCursorPointingHand)
+			} else {
+				rl.SetMouseCursor(rl.MouseCursorDefault)
+			}
+			rl.BeginDrawing()
+			backdrop.Begin()
+			viewer.Draw()
+			backdrop.End()
+			viewer.DrawOverlay(backdrop)
+			rl.EndDrawing()
+			continue
+		}
+
 		if nav.Update(screen) {
 			input.Text = ""
 			input.Focused = false
@@ -305,7 +353,12 @@ func main() {
 		}
 
 		timeline.KeysEnabled = !input.Focused
+		timeline.Obstacle = nav.Bounds()
 		timeline.Update(body)
+		if reveal != nil {
+			timeline.Reveal(reveal, body)
+			reveal = nil
+		}
 
 		showAll.Bounds = rl.NewRectangle(w-24-showAll.Bounds.Width-14, body.Y+(ui.TimelineBar-34)/2, showAll.Bounds.Width, 34)
 		if searching {
@@ -315,7 +368,7 @@ func main() {
 		switch {
 		case input.Hovered():
 			rl.SetMouseCursor(rl.MouseCursorIBeam)
-		case nav.Hovered() || timeline.ScrubHovered() || (nav.View == ui.ViewAlbums && albums.Hovered()) || (nav.View == ui.ViewPeople && people.Hovered()) || (searching && showAll.Hovered()):
+		case nav.Hovered() || timeline.ScrubHovered() || timeline.TileHovered() || (nav.View == ui.ViewAlbums && albums.Hovered()) || (nav.View == ui.ViewPeople && people.Hovered()) || (searching && showAll.Hovered()):
 			rl.SetMouseCursor(rl.MouseCursorPointingHand)
 		default:
 			rl.SetMouseCursor(rl.MouseCursorDefault)

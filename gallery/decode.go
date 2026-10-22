@@ -69,7 +69,7 @@ func exifThumbnail(p *Photo, maxSide int) *image.RGBA {
 	}
 
 	b := thumb.Bounds()
-	if max(b.Dx(), b.Dy()) < min(maxSide, minExifThumb) {
+	if max(b.Dx(), b.Dy()) < max(min(maxSide, minExifThumb), maxSide*3/4) {
 		return nil
 	}
 

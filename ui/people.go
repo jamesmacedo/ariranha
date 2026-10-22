@@ -207,6 +207,13 @@ func (s *PeopleStrip) Draw(bounds rl.Rectangle) {
 	rl.EndScissorMode()
 }
 
+func (s *PeopleStrip) Avatar(p search.PersonInfo) (rl.Texture2D, bool) {
+	if a := s.avatar(p); a != nil {
+		return a.tex, true
+	}
+	return rl.Texture2D{}, false
+}
+
 func (s *PeopleStrip) avatar(p search.PersonInfo) *avatar {
 	if a, ok := s.avatars[p.ID]; ok && bytes.Equal(a.source, p.Crop) {
 		return a

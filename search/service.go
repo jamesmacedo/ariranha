@@ -1,8 +1,13 @@
 package search
 
 import (
+	"errors"
+	"fmt"
 	"image"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -154,6 +159,7 @@ func (s *Service) putPhotos(photos []*gallery.Photo) {
 	for _, p := range photos {
 		if old := s.byRel[p.Rel]; old != nil {
 			delete(s.byID, old.ID)
+			p.Favorite = p.Favorite || old.Favorite
 		}
 		s.byRel[p.Rel] = p
 		s.byID[p.ID] = p
@@ -340,6 +346,41 @@ func (s *Service) catalogSize() int {
 	s.libMu.RLock()
 	defer s.libMu.RUnlock()
 	return len(s.byRel)
+}
+
+func (s *Service) SetFavorite(p *gallery.Photo, fav bool) error {
+	if s.store != nil {
+		if err := s.store.SetFavorite(p.Rel, fav); err != nil {
+			return err
+		}
+	}
+	p.Favorite = fav
+	return nil
+}
+
+func (s *Service) Trash(p *gallery.Photo) error {
+	if s.paths.Trash == "" {
+		return errors.New("trash folder not configured")
+	}
+	dst := filepath.Join(s.paths.Trash, filepath.FromSlash(p.Rel))
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	if _, err := os.Stat(dst); err == nil {
+		ext := filepath.Ext(dst)
+		dst = fmt.Sprintf("%s-%d%s", strings.TrimSuffix(dst, ext), time.Now().Unix(), ext)
+	}
+	if err := os.Rename(p.Path, dst); err != nil {
+		return err
+	}
+	s.forget(p)
+	if s.store != nil {
+		if err := s.store.DeletePhotos([]string{p.Rel}); err != nil {
+			return err
+		}
+	}
+	s.dropPhotos([]string{p.Rel})
+	return nil
 }
 
 func (s *Service) forget(p *gallery.Photo) {

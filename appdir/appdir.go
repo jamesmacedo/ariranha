@@ -15,6 +15,7 @@ type Dirs struct {
 	DB      string
 	Cache   string
 	Logs    string
+	Trash   string
 }
 
 func Locate() (Dirs, error) {
@@ -32,6 +33,7 @@ func Locate() (Dirs, error) {
 		DB:      filepath.Join(system, "db"),
 		Cache:   filepath.Join(system, "cache"),
 		Logs:    filepath.Join(system, "logs"),
+		Trash:   filepath.Join(system, "trash"),
 	}, nil
 }
 
@@ -54,7 +56,7 @@ func root() (string, error) {
 }
 
 func (d Dirs) Ensure() error {
-	for _, dir := range []string{d.Storage, d.Models, d.Runtime, d.DB, d.Cache, d.Logs} {
+	for _, dir := range []string{d.Storage, d.Models, d.Runtime, d.DB, d.Cache, d.Logs, d.Trash} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
