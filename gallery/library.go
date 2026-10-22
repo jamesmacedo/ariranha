@@ -24,7 +24,6 @@ type Photo struct {
 	ID          int64
 	Path        string
 	Rel         string
-	Album       string
 	Date        time.Time
 	Size        int64
 	ModTime     time.Time
@@ -47,14 +46,17 @@ func (p *Photo) Aspect() float32 {
 }
 
 type Album struct {
-	Name   string
-	Photos []*Photo
+	ID          int64
+	Name        string
+	Description string
+	Color       int
+	Created     time.Time
+	Photos      []*Photo
 }
 
 type Library struct {
 	Root   string
 	Photos []*Photo
-	Albums []*Album
 }
 
 type File struct {
@@ -158,7 +160,6 @@ func ReadPhoto(file File) *Photo {
 	p := &Photo{
 		Path:        file.Path,
 		Rel:         file.Rel,
-		Album:       AlbumOf(file.Rel),
 		Date:        file.ModTime,
 		Size:        file.Size,
 		ModTime:     file.ModTime,
@@ -190,13 +191,6 @@ func ReadPhoto(file File) *Photo {
 	return p
 }
 
-func AlbumOf(rel string) string {
-	if i := strings.IndexByte(rel, '/'); i > 0 {
-		return rel[:i]
-	}
-	return ""
-}
-
 func NewLibrary(root string, photos []*Photo) *Library {
 	l := &Library{Root: root, Photos: append([]*Photo(nil), photos...)}
 	sort.SliceStable(l.Photos, func(i, j int) bool {
@@ -206,18 +200,5 @@ func NewLibrary(root string, photos []*Photo) *Library {
 		return l.Photos[i].Rel < l.Photos[j].Rel
 	})
 
-	byName := map[string]*Album{}
-	for _, p := range l.Photos {
-		if p.Album == "" {
-			continue
-		}
-		a, ok := byName[p.Album]
-		if !ok {
-			a = &Album{Name: p.Album}
-			byName[p.Album] = a
-			l.Albums = append(l.Albums, a)
-		}
-		a.Photos = append(a.Photos, p)
-	}
 	return l
 }

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"math"
+	"unicode/utf8"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
@@ -12,6 +13,8 @@ type TextInput struct {
 	Placeholder string
 	Hint        string
 	Focused     bool
+	Plain       bool
+	MaxLen      int
 	OnSubmit    func(string)
 
 	theme *Theme
@@ -35,7 +38,7 @@ func (t *TextInput) Update() {
 		t.Focused = t.hover
 	}
 	ctrl := rl.IsKeyDown(rl.KeyLeftControl) || rl.IsKeyDown(rl.KeyRightControl)
-	if ctrl && (rl.IsKeyPressed(rl.KeyK) || rl.IsKeyPressed(rl.KeyF)) {
+	if !t.Plain && ctrl && (rl.IsKeyPressed(rl.KeyK) || rl.IsKeyPressed(rl.KeyF)) {
 		t.Focused = true
 	}
 
@@ -45,7 +48,7 @@ func (t *TextInput) Update() {
 	t.blink += rl.GetFrameTime()
 
 	for r := rl.GetCharPressed(); r > 0; r = rl.GetCharPressed() {
-		if r >= 32 {
+		if r >= 32 && (t.MaxLen <= 0 || utf8.RuneCountInString(t.Text) < t.MaxLen) {
 			t.Text += string(r)
 			t.blink = 0
 		}
@@ -62,6 +65,8 @@ func (t *TextInput) Update() {
 	switch {
 	case rl.IsKeyPressed(rl.KeyEnter), rl.IsKeyPressed(rl.KeyKpEnter):
 		t.submit()
+	case rl.IsKeyPressed(rl.KeyEscape) && t.Plain:
+		t.Focused = false
 	case rl.IsKeyPressed(rl.KeyEscape):
 		if t.Text != "" {
 			t.Text = ""
@@ -86,23 +91,32 @@ func (t *TextInput) Draw() {
 	if t.hover || t.Focused {
 		bg = th.RaisedHover
 	}
-	rl.DrawRectangleRounded(b, 1, 24, rl.Fade(bg, 0.85))
+	round := float32(1)
+	if t.Plain {
+		round = min(1, 20/b.Height)
+	}
+	rl.DrawRectangleRounded(b, round, 24, rl.Fade(bg, 0.85))
 	if t.Focused {
-		rl.DrawRectangleRoundedLinesEx(b, 1, 24, 1.5, th.Accent)
+		rl.DrawRectangleRoundedLinesEx(b, round, 24, 1.5, th.Accent)
 	}
 
 	cy := b.Y + b.Height/2
-	icon := rl.NewVector2(b.X+19, cy-1.5)
 	ic := th.Text
 	if !t.Focused && t.Text == "" {
 		ic = rl.Fade(th.Text, 0.8)
 	}
-	rl.DrawRing(icon, 5.2, 6.8, 0, 360, 32, ic)
-	rl.DrawLineEx(rl.NewVector2(icon.X+4.8, icon.Y+4.8), rl.NewVector2(icon.X+8.5, icon.Y+8.5), 1.8, ic)
-
 	const size = 15
 	left := b.X + 36
 	inner := b.Width - 36 - 14
+	if t.Plain {
+		ic = th.TextMuted
+		left = b.X + 14
+		inner = b.Width - 28
+	} else {
+		icon := rl.NewVector2(b.X+19, cy-1.5)
+		rl.DrawRing(icon, 5.2, 6.8, 0, 360, 32, ic)
+		rl.DrawLineEx(rl.NewVector2(icon.X+4.8, icon.Y+4.8), rl.NewVector2(icon.X+8.5, icon.Y+8.5), 1.8, ic)
+	}
 
 	if t.Hint != "" && !t.Focused && t.Text == "" {
 		hw := MeasureText(th.Medium, t.Hint, 12) + 12

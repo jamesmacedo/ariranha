@@ -42,6 +42,7 @@ const (
 	vbTrash
 	vbClose
 	vbThumb
+	vbAlbum
 )
 
 type vbutton struct {
@@ -52,10 +53,13 @@ type vbutton struct {
 
 type Viewer struct {
 	Open       bool
+	Inert      bool
 	OnFavorite func(*gallery.Photo, bool) error
 	OnDelete   func(*gallery.Photo) error
 	OnClose    func(*gallery.Photo)
 	PeopleOf   func(*gallery.Photo) []search.PersonInfo
+	AlbumsOf   func(*gallery.Photo) []*gallery.Album
+	OnAlbum    func(*gallery.Photo)
 	Avatars    *PeopleStrip
 
 	theme  *Theme
@@ -67,6 +71,7 @@ type Viewer struct {
 
 	people    []search.PersonInfo
 	peopleFor *gallery.Photo
+	inAlbums  []*gallery.Album
 
 	fullTex   rl.Texture2D
 	hasFull   bool
@@ -143,6 +148,10 @@ func (v *Viewer) jump(i int) {
 	}
 	v.index = i
 	v.offset = float32(v.dir) * vwSlide
+}
+
+func (v *Viewer) Notify(msg string) {
+	v.notify(msg)
 }
 
 func (v *Viewer) notify(msg string) {
@@ -241,7 +250,7 @@ func (v *Viewer) layout(screen rl.Rectangle) {
 	t := v.theme
 	counter := v.counterWidth()
 	closeW := MeasureText(t.Medium, "Close", 14) + MeasureText(t.Medium, "Esc", 11) + 12 + 30
-	barW := float32(8) + vwBtn + counter + vwBtn + 17 + vwBtn*2 + 4 + 17 + closeW + 8
+	barW := float32(8) + vwBtn + counter + vwBtn + 17 + vwBtn*3 + 8 + 17 + closeW + 8
 	v.barR = rl.NewRectangle(v.imageR.X+(v.imageR.Width-barW)/2, v.imageR.Y+v.imageR.Height-vwBarH-14, barW, vwBarH)
 	by := v.barR.Y + (vwBarH-vwBtn)/2
 	x := v.barR.X + 8
@@ -250,6 +259,8 @@ func (v *Viewer) layout(screen rl.Rectangle) {
 	add(vbNext, 0, rl.NewRectangle(x, by, vwBtn, vwBtn))
 	x += vwBtn + 17
 	add(vbFav, 0, rl.NewRectangle(x, by, vwBtn, vwBtn))
+	x += vwBtn + 4
+	add(vbAlbum, 0, rl.NewRectangle(x, by, vwBtn, vwBtn))
 	x += vwBtn + 4
 	add(vbTrash, 0, rl.NewRectangle(x, by, vwBtn, vwBtn))
 	x += vwBtn + 17
@@ -270,6 +281,7 @@ func (v *Viewer) Update(screen rl.Rectangle) {
 	dt := rl.GetFrameTime()
 
 	switch {
+	case v.Inert:
 	case rl.IsKeyPressed(rl.KeyEscape):
 		v.close()
 		return
@@ -313,6 +325,10 @@ func (v *Viewer) Update(screen rl.Rectangle) {
 		}
 	}
 
+	v.inAlbums = nil
+	if v.AlbumsOf != nil {
+		v.inAlbums = v.AlbumsOf(cur)
+	}
 	if v.peopleFor != cur {
 		v.peopleFor = cur
 		v.people = nil
@@ -326,7 +342,7 @@ func (v *Viewer) Update(screen rl.Rectangle) {
 		v.strip, v.stripSet = target, true
 	}
 	v.strip = smooth(v.strip, target)
-	if rl.CheckCollisionPointRec(rl.GetMousePosition(), v.stripR) {
+	if !v.Inert && rl.CheckCollisionPointRec(rl.GetMousePosition(), v.stripR) {
 		if w := rl.GetMouseWheelMove(); w != 0 {
 			v.jump(clampInt(v.index-int(w), 0, len(v.photos)-1))
 		}
@@ -339,6 +355,10 @@ func (v *Viewer) Update(screen rl.Rectangle) {
 
 	mouse := rl.GetMousePosition()
 	v.hover = vbutton{}
+	if v.Inert {
+		v.armed = vbutton{}
+		return
+	}
 	for _, b := range v.buttons {
 		if rl.CheckCollisionPointRec(mouse, b.rect) {
 			v.hover = b
@@ -367,6 +387,10 @@ func (v *Viewer) click(b vbutton) {
 		v.toggleFavorite()
 	case vbTrash:
 		v.trash()
+	case vbAlbum:
+		if v.OnAlbum != nil {
+			v.OnAlbum(v.Current())
+		}
 	case vbThumb:
 		v.jump(b.index)
 	}
@@ -531,6 +555,13 @@ func (v *Viewer) DrawOverlay(bd *Backdrop) {
 			heart(c, 8.5*s, col, false)
 		}
 	})
+	icon(vbAlbum, func(c rl.Vector2, col rl.Color) {
+		if len(v.inAlbums) > 0 {
+			col = v.theme.AlbumColor(v.inAlbums[0].Color)
+		}
+		rl.DrawRectangleRoundedLinesEx(rl.NewRectangle(c.X-8, c.Y-8, 16, 16), 0.3, 8, 1.8, col)
+		plusIcon(c, 4, col)
+	})
 	icon(vbTrash, func(c rl.Vector2, col rl.Color) {
 		trashIcon(c, col)
 	})
@@ -607,7 +638,6 @@ func (v *Viewer) drawSide() {
 	panelHeader(t, people, "People", func(c rl.Vector2, col rl.Color) { drawNavIcon(1, c.X-10, c.Y-10, col) })
 	if len(v.people) == 0 {
 		DrawText(t.Regular, "No people in this photo", x+16, people.Y+62, 13, t.TextMuted)
-		return
 	}
 	for i, pi := range v.people {
 		r := chips[i]
@@ -622,6 +652,45 @@ func (v *Viewer) drawSide() {
 		}
 		DrawText(t.Medium, personLabel(pi), r.X+36, r.Y+(r.Height-13)/2-1, 13, t.Text)
 	}
+	v.drawAlbums(x, w, people.Y+people.Height+vwPad)
+}
+
+func (v *Viewer) drawAlbums(x, w, y float32) {
+	t := v.theme
+	var chips []rl.Rectangle
+	cx, cy := float32(0), float32(0)
+	for _, a := range v.inAlbums {
+		cw := min(w-28, MeasureText(t.Medium, a.Name, 13)+40)
+		if cx > 0 && cx+cw > w-28 {
+			cx, cy = 0, cy+40
+		}
+		chips = append(chips, rl.NewRectangle(x+14+cx, cy, cw, 32))
+		cx += cw + 8
+	}
+	ph := float32(60 + 44)
+	if n := len(chips); n > 0 {
+		ph = 60 + chips[n-1].Y + chips[n-1].Height + 16
+	}
+	panel := rl.NewRectangle(x, y, w, ph)
+	if panel.Y+panel.Height > v.sideR.Y+v.sideR.Height {
+		return
+	}
+	DrawRoundedRect(panel, vwRadius, t.Surface)
+	panelHeader(t, panel, "Albums", func(c rl.Vector2, col rl.Color) { drawNavIcon(2, c.X-10, c.Y-10, col) })
+	if len(v.inAlbums) == 0 {
+		DrawText(t.Regular, "Not in any album", x+16, panel.Y+62, 13, t.TextMuted)
+		return
+	}
+	for i, a := range v.inAlbums {
+		r := chips[i]
+		r.Y += panel.Y + 56
+		col := t.AlbumColor(a.Color)
+		rl.DrawRectangleRounded(r, 1, 24, rl.Fade(col, 0.12))
+		rl.DrawRectangleRoundedLinesEx(r, 1, 24, 1, rl.Fade(col, 0.6))
+		rl.DrawCircleV(rl.NewVector2(r.X+16, r.Y+r.Height/2), 5, col)
+		DrawText(t.Medium, FitText(t.Medium, a.Name, 13, r.Width-40), r.X+28, r.Y+(r.Height-13)/2-1, 13, t.Text)
+	}
+
 }
 
 func (v *Viewer) avatar(p search.PersonInfo) (rl.Texture2D, bool) {

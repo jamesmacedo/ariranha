@@ -72,6 +72,22 @@ CREATE TABLE IF NOT EXISTS favorites (
 	added INTEGER NOT NULL
 ) WITHOUT ROWID;
 
+CREATE TABLE IF NOT EXISTS albums (
+	id          INTEGER PRIMARY KEY,
+	name        TEXT    NOT NULL,
+	description TEXT    NOT NULL DEFAULT '',
+	color       INTEGER NOT NULL DEFAULT 0,
+	created     INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS album_photos (
+	album_id INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
+	path     TEXT    NOT NULL,
+	added    INTEGER NOT NULL,
+	PRIMARY KEY (album_id, path)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS album_photos_path ON album_photos(path);
+
 CREATE TABLE IF NOT EXISTS queries (
 	text  TEXT    NOT NULL,
 	model TEXT    NOT NULL,
@@ -345,7 +361,6 @@ func (s *Store) LoadPhotos(root string) ([]*gallery.Photo, error) {
 			return nil, err
 		}
 		p.Path = filepath.Join(root, filepath.FromSlash(p.Rel))
-		p.Album = gallery.AlbumOf(p.Rel)
 		p.ModTime = time.Unix(0, mtime)
 		p.Date = time.Unix(0, taken)
 		p.Duration = time.Duration(duration)
@@ -433,4 +448,111 @@ func (s *Store) SaveQuery(text string, vec []float32) error {
 	}
 	_, err := s.db.Exec(`DELETE FROM queries WHERE used < (SELECT used FROM queries ORDER BY used DESC LIMIT 1 OFFSET ?)`, maxCachedQueries-1)
 	return err
+}
+
+type AlbumRecord struct {
+	ID          int64
+	Name        string
+	Description string
+	Color       int
+	Created     time.Time
+	Paths       map[string]bool
+}
+
+func (s *Store) LoadAlbums() ([]*AlbumRecord, error) {
+	rows, err := s.db.Query(`SELECT id, name, description, color, created FROM albums ORDER BY created DESC, id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	var out []*AlbumRecord
+	byID := map[int64]*AlbumRecord{}
+	for rows.Next() {
+		a := &AlbumRecord{Paths: map[string]bool{}}
+		var created int64
+		if err := rows.Scan(&a.ID, &a.Name, &a.Description, &a.Color, &created); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		a.Created = time.Unix(0, created)
+		out = append(out, a)
+		byID[a.ID] = a
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	rows, err = s.db.Query(`SELECT album_id, path FROM album_photos`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var path string
+		if err := rows.Scan(&id, &path); err != nil {
+			return nil, err
+		}
+		if a := byID[id]; a != nil {
+			a.Paths[path] = true
+		}
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CreateAlbum(name, description string, color int, created time.Time) (int64, error) {
+	res, err := s.db.Exec(`INSERT INTO albums (name, description, color, created) VALUES (?, ?, ?, ?)`, name, description, color, created.UnixNano())
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (s *Store) UpdateAlbum(id int64, name, description string, color int) error {
+	_, err := s.db.Exec(`UPDATE albums SET name = ?, description = ?, color = ? WHERE id = ?`, name, description, color, id)
+	return err
+}
+
+func (s *Store) DeleteAlbum(id int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM album_photos WHERE album_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM albums WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) SetAlbumPhotos(id int64, paths []string, add bool) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	query := `DELETE FROM album_photos WHERE album_id = ? AND path = ?`
+	if add {
+		query = `INSERT INTO album_photos (album_id, path, added) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`
+	}
+	stmt, err := tx.Prepare(query)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	now := time.Now().UnixNano()
+	for _, p := range paths {
+		if add {
+			_, err = stmt.Exec(id, p, now)
+		} else {
+			_, err = stmt.Exec(id, p)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }

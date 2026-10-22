@@ -165,7 +165,6 @@ func ReadVideo(file File) *Photo {
 	p := &Photo{
 		Path:        file.Path,
 		Rel:         file.Rel,
-		Album:       AlbumOf(file.Rel),
 		Date:        file.ModTime,
 		Size:        file.Size,
 		ModTime:     file.ModTime,

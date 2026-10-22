@@ -14,6 +14,7 @@ import (
 )
 
 const (
+	peoplePad    = 24
 	peopleTitle  = 44
 	peopleAvatar = 84
 	peopleGap    = 22
@@ -104,7 +105,7 @@ func (s *PeopleStrip) SelectedPerson() (search.PersonInfo, bool) {
 }
 
 func (s *PeopleStrip) slot(bounds rl.Rectangle, i int) rl.Rectangle {
-	x := bounds.X + albumPad + float32(i)*(peopleAvatar+peopleGap) - s.scroll
+	x := bounds.X + peoplePad + float32(i)*(peopleAvatar+peopleGap) - s.scroll
 	return rl.NewRectangle(x, bounds.Y+peopleTitle, peopleAvatar, peopleAvatar)
 }
 
@@ -120,7 +121,7 @@ func (s *PeopleStrip) Update(bounds rl.Rectangle) bool {
 		}
 		s.target -= d * 90
 	}
-	content := albumPad*2 + float32(s.slots())*(peopleAvatar+peopleGap) - peopleGap
+	content := peoplePad*2 + float32(s.slots())*(peopleAvatar+peopleGap) - peopleGap
 	s.target = clamp(s.target, 0, max(0, content-bounds.Width))
 	s.scroll = smooth(s.scroll, s.target)
 
@@ -164,12 +165,12 @@ func (s *PeopleStrip) Update(bounds rl.Rectangle) bool {
 func (s *PeopleStrip) Draw(bounds rl.Rectangle) {
 	t := s.theme
 	rl.DrawRectangleRec(bounds, t.Background)
-	DrawText(t.Medium, "People", bounds.X+albumPad, bounds.Y+12, 20, t.Text)
+	DrawText(t.Medium, "People", bounds.X+peoplePad, bounds.Y+12, 20, t.Text)
 
 	rl.BeginScissorMode(int32(bounds.X), int32(bounds.Y+peopleTitle-6), int32(bounds.Width), int32(bounds.Height-peopleTitle+6))
 	shown, hidden := s.visible()
 	if len(shown) == 0 && hidden == 0 {
-		DrawText(t.Regular, s.Empty, bounds.X+albumPad, bounds.Y+peopleTitle+8, 16, t.TextMuted)
+		DrawText(t.Regular, s.Empty, bounds.X+peoplePad, bounds.Y+peopleTitle+8, 16, t.TextMuted)
 	}
 	for i, p := range shown {
 		r := s.slot(bounds, i)

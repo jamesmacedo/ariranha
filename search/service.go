@@ -75,6 +75,11 @@ type Service struct {
 	scanMu sync.Mutex
 	scans  map[string]Key
 
+	albumMu      sync.Mutex
+	albums       []*AlbumRecord
+	albumVersion int
+	nextAlbum    int64
+
 	vision *ImageEncoder
 	faces  *FaceEncoder
 	faceOK atomic.Bool
@@ -118,6 +123,7 @@ func Start(root string, paths Paths) *Service {
 			s.status.Err = err
 		}
 	}
+	s.loadAlbums()
 
 	s.wg.Add(2)
 	go s.catalogLoop()

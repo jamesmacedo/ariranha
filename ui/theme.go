@@ -35,6 +35,29 @@ type Theme struct {
 	Shadow      rl.Color
 }
 
+var albumPalette = [...][2]uint32{
+	{0x7FE3C4, 0x0A7D61},
+	{0xA4B8FF, 0x3A55D4},
+	{0xFF8CA1, 0xD0314C},
+	{0xFFC56E, 0xB86E00},
+	{0xC9A7FF, 0x7442C8},
+	{0xFF9E7A, 0xC2410C},
+	{0x7CD4FF, 0x0369A1},
+	{0xB8E07A, 0x4D7C0F},
+}
+
+func AlbumColors() int {
+	return len(albumPalette)
+}
+
+func (t *Theme) AlbumColor(i int) rl.Color {
+	c := albumPalette[clampInt(i, 0, len(albumPalette)-1)]
+	if t.Dark {
+		return hex(c[0])
+	}
+	return hex(c[1])
+}
+
 func hex(v uint32) rl.Color {
 	return rl.NewColor(uint8(v>>16), uint8(v>>8), uint8(v), 255)
 }
@@ -123,7 +146,7 @@ func codepoints() []rune {
 	for r := rune(160); r < 256; r++ {
 		cp = append(cp, r)
 	}
-	return append(cp, '…', '•', '–', '—', '−', '“', '”', '‘', '’')
+	return append(cp, '…', '•', '–', '—', '−', '“', '”', '‘', '’', '‹', '›')
 }
 
 func DrawText(font rl.Font, text string, x, y, size float32, c rl.Color) {

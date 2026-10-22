@@ -38,11 +38,6 @@ func benchPhotos(t *testing.T, n int) []*gallery.Photo {
 		t.Skip("sem fotos em", dir)
 	}
 	var out []*gallery.Photo
-	for _, a := range lib.Albums {
-		if len(out) < n {
-			out = append(out, a.Photos[0])
-		}
-	}
 	photos := append([]*gallery.Photo(nil), lib.Photos...)
 	sort.Slice(photos, func(i, j int) bool {
 		return photos[i].Width*photos[i].Height > photos[j].Width*photos[j].Height

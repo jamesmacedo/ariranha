@@ -41,6 +41,7 @@ type Timeline struct {
 	KeysEnabled bool
 	BottomInset float32
 	Obstacle    rl.Rectangle
+	Accent      rl.Color
 	OnOpen      func(photos []*gallery.Photo, index int)
 
 	theme   *Theme
@@ -61,10 +62,12 @@ type Timeline struct {
 	armed      int
 	pressY     float32
 	scrub      scrubber
+	selected   map[*gallery.Photo]bool
+	anchor     int
 }
 
 func NewTimeline(theme *Theme, thumbs *gallery.ThumbCache) *Timeline {
-	return &Timeline{theme: theme, thumbs: thumbs, hover: -1, armed: -1, laidOut: -1, KeysEnabled: true}
+	return &Timeline{theme: theme, thumbs: thumbs, hover: -1, armed: -1, laidOut: -1, KeysEnabled: true, selected: map[*gallery.Photo]bool{}, anchor: -1}
 }
 
 func (t *Timeline) SetPhotos(title string, photos []*gallery.Photo) {
@@ -78,6 +81,75 @@ func (t *Timeline) SetResults(title, section string, photos []*gallery.Photo) {
 func (t *Timeline) Refresh(photos []*gallery.Photo) {
 	t.photos = photos
 	t.laidOut = -1
+	if len(t.selected) > 0 {
+		keep := make(map[*gallery.Photo]bool, len(t.selected))
+		for _, p := range photos {
+			if t.selected[p] {
+				keep[p] = true
+			}
+		}
+		t.selected = keep
+	}
+	t.anchor = -1
+}
+
+func (t *Timeline) Photos() []*gallery.Photo {
+	return t.photos
+}
+
+func (t *Timeline) SelectionCount() int {
+	return len(t.selected)
+}
+
+func (t *Timeline) Selected() []*gallery.Photo {
+	out := make([]*gallery.Photo, 0, len(t.selected))
+	for _, p := range t.photos {
+		if t.selected[p] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func (t *Timeline) ClearSelection() {
+	clear(t.selected)
+	t.anchor = -1
+}
+
+func (t *Timeline) SelectAll() {
+	for _, p := range t.photos {
+		t.selected[p] = true
+	}
+}
+
+func (t *Timeline) index(p *gallery.Photo) int {
+	for i, q := range t.photos {
+		if q == p {
+			return i
+		}
+	}
+	return -1
+}
+
+func (t *Timeline) toggle(i int) {
+	p := t.photos[i]
+	if t.selected[p] {
+		delete(t.selected, p)
+	} else {
+		t.selected[p] = true
+	}
+	t.anchor = i
+}
+
+func (t *Timeline) selectRange(i int) {
+	a, b := min(t.anchor, i), max(t.anchor, i)
+	for k := a; k <= b; k++ {
+		t.selected[t.photos[k]] = true
+	}
+}
+
+func checkArea(r rl.Rectangle) rl.Rectangle {
+	return rl.NewRectangle(r.X, r.Y, 36, 36)
 }
 
 func (t *Timeline) Remove(p *gallery.Photo) {
@@ -85,6 +157,8 @@ func (t *Timeline) Remove(p *gallery.Photo) {
 		if q == p {
 			t.photos = append(append([]*gallery.Photo(nil), t.photos[:i]...), t.photos[i+1:]...)
 			t.laidOut = -1
+			delete(t.selected, p)
+			t.anchor = -1
 			return
 		}
 	}
@@ -114,6 +188,7 @@ func (t *Timeline) set(title, section string, photos []*gallery.Photo) {
 	t.photos = photos
 	t.laidOut = -1
 	t.scroll, t.target = 0, 0
+	t.ClearSelection()
 }
 
 func (t *Timeline) view(bounds rl.Rectangle) rl.Rectangle {
@@ -253,8 +328,14 @@ func (t *Timeline) Update(bounds rl.Rectangle) {
 		t.target -= rl.GetMouseWheelMove() * 120
 	}
 
+	ctrl := rl.IsKeyDown(rl.KeyLeftControl) || rl.IsKeyDown(rl.KeyRightControl)
+	shift := rl.IsKeyDown(rl.KeyLeftShift) || rl.IsKeyDown(rl.KeyRightShift)
 	switch {
 	case !t.KeysEnabled:
+	case rl.IsKeyPressed(rl.KeyEscape) && len(t.selected) > 0:
+		t.ClearSelection()
+	case ctrl && rl.IsKeyPressed(rl.KeyA):
+		t.SelectAll()
 	case rl.IsKeyPressed(rl.KeyPageDown):
 		t.target += v.Height * 0.9
 	case rl.IsKeyPressed(rl.KeyPageUp):
@@ -333,13 +414,18 @@ func (t *Timeline) Update(bounds rl.Rectangle) {
 	}
 	if rl.IsMouseButtonReleased(rl.MouseButtonLeft) {
 		moved := math.Abs(float64(mouse.Y+t.scroll-t.pressY)) > 6
-		if t.armed >= 0 && t.armed == t.hover && !moved && t.OnOpen != nil {
-			p := t.tiles[t.armed].photo
-			for i, q := range t.photos {
-				if q == p {
-					t.OnOpen(t.photos, i)
-					break
-				}
+		if t.armed >= 0 && t.armed == t.hover && !moved {
+			tl := t.tiles[t.armed]
+			local := rl.NewVector2(mouse.X-v.X, mouse.Y-v.Y+t.scroll)
+			i := t.index(tl.photo)
+			switch {
+			case i < 0:
+			case shift && t.anchor >= 0 && t.anchor < len(t.photos):
+				t.selectRange(i)
+			case ctrl || shift || len(t.selected) > 0 || rl.CheckCollisionPointRec(local, checkArea(tl.rect)):
+				t.toggle(i)
+			case t.OnOpen != nil:
+				t.OnOpen(t.photos, i)
 			}
 		}
 		t.armed = -1
@@ -351,8 +437,13 @@ func (t *Timeline) Draw(bounds rl.Rectangle) {
 	v := t.view(bounds)
 
 	rl.DrawRectangleRec(bounds, th.Background)
-	DrawText(th.Medium, t.Title, bounds.X+tlPad, bounds.Y+18, 24, th.Text)
-	tw := MeasureText(th.Medium, t.Title, 24)
+	tx := bounds.X + tlPad
+	if t.Accent.A > 0 {
+		rl.DrawCircleV(rl.NewVector2(tx+6, bounds.Y+31), 6, t.Accent)
+		tx += 20
+	}
+	DrawText(th.Medium, t.Title, tx, bounds.Y+18, 24, th.Text)
+	tw := MeasureText(th.Medium, t.Title, 24) + tx - bounds.X - tlPad
 	label := itemsLabel(len(t.photos))
 	if t.Status != "" {
 		label += "  •  " + t.Status
@@ -394,16 +485,26 @@ func (t *Timeline) Draw(bounds rl.Rectangle) {
 	for i := first; i < last; i++ {
 		tl := t.tiles[i]
 		r := rl.NewRectangle(v.X+tl.rect.X, v.Y+tl.rect.Y-t.scroll, tl.rect.Width, tl.rect.Height)
+		sel := t.selected[tl.photo]
+		img := r
+		if sel {
+			DrawRoundedRect(r, tileRadius, rl.Fade(th.Accent, 0.18))
+			k := min(r.Width, r.Height) * 0.07
+			img = rl.NewRectangle(r.X+k, r.Y+k, r.Width-2*k, r.Height-2*k)
+		}
 		if tex, ok := t.thumbs.Get(tl.photo); ok {
-			DrawCoverRounded(tex, r, tileRadius, rl.White)
+			DrawCoverRounded(tex, img, tileRadius, rl.White)
 		} else {
-			DrawRoundedRect(r, tileRadius, tl.photo.Color)
+			DrawRoundedRect(img, tileRadius, tl.photo.Color)
 		}
 		if tl.photo.IsVideo() {
-			drawVideoBadge(th, r, tl.photo)
+			drawVideoBadge(th, img, tl.photo)
 		}
-		if i == t.hover {
+		if i == t.hover && !sel {
 			DrawRoundedRect(r, tileRadius, rl.Fade(rl.White, 0.08))
+		}
+		if sel || i == t.hover || len(t.selected) > 0 {
+			drawCheck(th, r, sel, i == t.hover)
 		}
 	}
 
@@ -488,4 +589,22 @@ func daySub(d, now time.Time) string {
 func capitalize(s string) string {
 	r, n := utf8.DecodeRuneInString(s)
 	return string(unicode.ToUpper(r)) + s[n:]
+}
+
+func drawCheck(t *Theme, r rl.Rectangle, on, hover bool) {
+	if r.Width < 40 || r.Height < 40 {
+		return
+	}
+	c := rl.NewVector2(r.X+18, r.Y+18)
+	if on {
+		rl.DrawCircleV(c, 11, t.Accent)
+		checkIcon(c, 5, t.OnAccent)
+		return
+	}
+	rl.DrawCircleV(c, 11, rl.Fade(rl.Black, 0.25))
+	a := float32(0.7)
+	if hover {
+		a = 1
+	}
+	rl.DrawRing(c, 9.5, 11, 0, 360, 32, rl.Fade(rl.White, a))
 }
