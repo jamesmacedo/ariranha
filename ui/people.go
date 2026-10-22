@@ -30,6 +30,7 @@ type PeopleStrip struct {
 	People    []search.PersonInfo
 	Selected  int64
 	MinPhotos int
+	Empty     string
 	expanded  bool
 
 	theme   *Theme
@@ -163,10 +164,13 @@ func (s *PeopleStrip) Update(bounds rl.Rectangle) bool {
 func (s *PeopleStrip) Draw(bounds rl.Rectangle) {
 	t := s.theme
 	rl.DrawRectangleRec(bounds, t.Background)
-	DrawText(t.Medium, "Pessoas", bounds.X+albumPad, bounds.Y+12, 20, t.Text)
+	DrawText(t.Medium, "People", bounds.X+albumPad, bounds.Y+12, 20, t.Text)
 
 	rl.BeginScissorMode(int32(bounds.X), int32(bounds.Y+peopleTitle-6), int32(bounds.Width), int32(bounds.Height-peopleTitle+6))
 	shown, hidden := s.visible()
+	if len(shown) == 0 && hidden == 0 {
+		DrawText(t.Regular, s.Empty, bounds.X+albumPad, bounds.Y+peopleTitle+8, 16, t.TextMuted)
+	}
 	for i, p := range shown {
 		r := s.slot(bounds, i)
 		if r.X+r.Width < bounds.X || r.X > bounds.X+bounds.Width {
@@ -188,7 +192,7 @@ func (s *PeopleStrip) Draw(bounds rl.Rectangle) {
 
 		name := p.Name
 		if name == "" {
-			name = fmt.Sprintf("Pessoa %d", p.ID)
+			name = fmt.Sprintf("Person %d", p.ID)
 		}
 		name = FitText(t.Medium, name, 14, peopleAvatar+peopleGap-4)
 		nw := MeasureText(t.Medium, name, 14)
@@ -256,18 +260,18 @@ func (s *PeopleStrip) drawToggle(r rl.Rectangle, hidden int, hover bool) {
 	}
 	rl.DrawCircleV(center, r.Width/2, bg)
 
-	icon, label := fmt.Sprintf("+%d", hidden), "Outras"
+	icon, label := fmt.Sprintf("+%d", hidden), "Others"
 	if s.expanded {
-		icon, label = "−", "Ocultar"
+		icon, label = "−", "Hide"
 	}
 	iw := MeasureText(t.Medium, icon, 24)
 	DrawText(t.Medium, icon, center.X-iw/2, center.Y-13, 24, t.People)
 
 	lw := MeasureText(t.Medium, label, 14)
 	DrawText(t.Medium, label, center.X-lw/2, r.Y+r.Height+8, 14, t.Text)
-	sub := fmt.Sprintf("%d pessoas", hidden)
+	sub := fmt.Sprintf("%d people", hidden)
 	if hidden == 1 {
-		sub = "1 pessoa"
+		sub = "1 person"
 	}
 	sw := MeasureText(t.Regular, sub, 12)
 	DrawText(t.Regular, sub, center.X-sw/2, r.Y+r.Height+26, 12, t.TextMuted)

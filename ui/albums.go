@@ -118,7 +118,7 @@ func (s *AlbumStrip) Update(bounds rl.Rectangle) bool {
 func (s *AlbumStrip) Draw(bounds rl.Rectangle) {
 	t := s.theme
 	rl.DrawRectangleRec(bounds, t.Background)
-	DrawText(t.Medium, "Álbuns", bounds.X+albumPad, bounds.Y+20, 24, t.Text)
+	DrawText(t.Medium, "Albums", bounds.X+albumPad, bounds.Y+20, 24, t.Text)
 
 	if len(s.Albums) == 0 {
 		DrawText(t.Regular, s.Empty, bounds.X+albumPad, bounds.Y+albumTitle+8, 16, t.TextMuted)
@@ -154,5 +154,5 @@ func itemsLabel(n int) string {
 	if n == 1 {
 		return "1 item"
 	}
-	return fmt.Sprintf("%d itens", n)
+	return fmt.Sprintf("%d items", n)
 }

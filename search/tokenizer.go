@@ -63,7 +63,7 @@ func LoadTokenizer(path string) (*Tokenizer, error) {
 		return nil, err
 	}
 	if doc.Model.Type != "Unigram" {
-		return nil, fmt.Errorf("tokenizer %q não suportado", doc.Model.Type)
+		return nil, fmt.Errorf("tokenizer %q not supported", doc.Model.Type)
 	}
 
 	t := &Tokenizer{

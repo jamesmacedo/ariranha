@@ -4,6 +4,12 @@ import rl "github.com/gen2brain/raylib-go/raylib"
 
 const blurScale = 4
 
+const (
+	glZero    = 0
+	glOne     = 1
+	glFuncAdd = 0x8006
+)
+
 const blurShader = `#version 330
 in vec2 fragTexCoord;
 in vec4 fragColor;
@@ -130,7 +136,10 @@ func (b *Backdrop) End() {
 	b.pass(s1, s0.Texture, rl.NewVector2(1/sw, 0))
 	b.pass(s0, s1.Texture, rl.NewVector2(0, 1/sh))
 
+	rl.SetBlendFactors(glOne, glZero, glFuncAdd)
+	rl.BeginBlendMode(rl.BlendCustom)
 	rl.DrawTexturePro(b.scene.Texture, flipped(b.scene.Texture), rl.NewRectangle(0, 0, float32(b.w), float32(b.h)), rl.Vector2{}, 0, rl.White)
+	rl.EndBlendMode()
 }
 
 func (b *Backdrop) Glass(r rl.Rectangle, radius float32, tint rl.Color) {

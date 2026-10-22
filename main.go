@@ -20,23 +20,23 @@ func searchStatus(st search.Status) string {
 	var parts []string
 	if st.Reading {
 		if st.Discovered == 0 {
-			parts = append(parts, "procurando fotos…")
+			parts = append(parts, "looking for photos…")
 		} else {
-			parts = append(parts, fmt.Sprintf("lendo %d/%d", st.Cataloged, st.Discovered))
+			parts = append(parts, fmt.Sprintf("reading %d/%d", st.Cataloged, st.Discovered))
 		}
 	}
 	switch st.State {
 	case search.StateLoading:
-		parts = append(parts, "carregando modelos…")
+		parts = append(parts, "loading models…")
 	case search.StateIndexing:
-		parts = append(parts, fmt.Sprintf("indexando %d/%d", st.Indexed, max(st.Total, st.Cataloged)))
-		parts = append(parts, fmt.Sprintf("%d rostos", st.Faces))
+		parts = append(parts, fmt.Sprintf("indexing %d/%d", st.Indexed, max(st.Total, st.Cataloged)))
+		parts = append(parts, fmt.Sprintf("%d faces", st.Faces))
 		if st.Remaining > 0 {
 			parts = append(parts, formatRemaining(st.Remaining))
 		}
 	case search.StateReady:
 		if st.FaceErr != nil {
-			parts = append(parts, "rostos indisponíveis: "+st.FaceErr.Error())
+			parts = append(parts, "faces unavailable: "+st.FaceErr.Error())
 		}
 	}
 	return strings.Join(parts, "  •  ")
@@ -45,26 +45,13 @@ func searchStatus(st search.Status) string {
 func formatRemaining(d time.Duration) string {
 	switch {
 	case d < time.Minute:
-		return "menos de 1 min restante"
+		return "less than 1 min left"
 	case d < time.Hour:
-		return fmt.Sprintf("~%d min restantes", int(d.Round(time.Minute).Minutes()))
+		return fmt.Sprintf("~%d min left", int(d.Round(time.Minute).Minutes()))
 	default:
 		h := int(d.Hours())
 		m := int(d.Minutes()) % 60
-		return fmt.Sprintf("~%dh%02d restantes", h, m)
-	}
-}
-
-func searchPlaceholder(st search.Status, empty bool) string {
-	switch {
-	case empty:
-		return "Coloque fotos em ./storage"
-	case st.State == search.StateUnavailable && st.Err != nil:
-		return "Busca indisponível: " + st.Err.Error()
-	case st.State == search.StateLoading:
-		return "Carregando modelo…"
-	default:
-		return "Pesquisar nas suas fotos"
+		return fmt.Sprintf("~%dh%02d left", h, m)
 	}
 }
 
@@ -108,84 +95,132 @@ func main() {
 
 	finder := search.Start(dirs.Storage, search.NewPaths(dirs.Models, dirs.Runtime, dirs.Database()))
 	defer finder.Close()
-	lib := finder.Library()
 	libVersion := finder.LibraryVersion()
+	lib := finder.Library()
 	var libRefreshed time.Time
 	var loggedErr, loggedFaceErr, loggedCatalog bool
 
 	albums := ui.NewAlbumStrip(theme, thumbs, lib.Albums)
-	albums.Empty = "Nenhum álbum. Crie subpastas em ./storage"
-
-	timeline := ui.NewTimeline(theme, thumbs)
-	allTitle := "Fotos"
-	timeline.SetPhotos(allTitle, lib.Photos)
-
-	input := ui.NewTextInput(theme, "")
-	searching := false
+	albums.Empty = "No albums. Create subfolders in ./storage"
 
 	people := ui.NewPeopleStrip(theme)
+	people.Empty = "No people recognized yet"
 	defer people.Unload()
 	peopleVersion := -1
 
-	showAllPhotos := func() {
-		albums.Selected = nil
-		people.Selected = 0
-		searching = false
-		input.Text = ""
-		timeline.SetPhotos(allTitle, lib.Photos)
+	timeline := ui.NewTimeline(theme, thumbs)
+	timeline.BottomInset = ui.NavInset
+
+	backdrop := ui.NewBackdrop()
+	defer backdrop.Unload()
+
+	input := ui.NewTextInput(theme, "Search")
+	input.Hint = "Ctrl K"
+	nav := ui.NewNavBar(theme, input)
+	searching := false
+
+	personName := func(p search.PersonInfo) string {
+		if p.Name != "" {
+			return p.Name
+		}
+		return fmt.Sprintf("Person %d", p.ID)
 	}
+
+	showView := func() {
+		switch nav.View {
+		case ui.ViewPhotos:
+			timeline.SetPhotos("Photos", lib.Photos)
+		case ui.ViewPeople:
+			if p, ok := people.SelectedPerson(); ok {
+				timeline.SetPhotos(personName(p), finder.PhotosOf(p))
+			} else {
+				timeline.SetPhotos("People", nil)
+			}
+		case ui.ViewAlbums:
+			if albums.Selected != nil {
+				timeline.SetPhotos(albums.Selected.Name, albums.Selected.Photos)
+			} else {
+				timeline.SetPhotos("Albums", nil)
+			}
+		}
+	}
+
+	enterView := func() {
+		searching = false
+		switch nav.View {
+		case ui.ViewPeople:
+			if _, ok := people.SelectedPerson(); !ok && len(people.People) > 0 {
+				people.Selected = people.People[0].ID
+			}
+		case ui.ViewAlbums:
+			if albums.Selected == nil && len(albums.Albums) > 0 {
+				albums.Selected = albums.Albums[0]
+			}
+		}
+		showView()
+	}
+	showView()
 
 	input.OnSubmit = func(q string) {
 		if strings.TrimSpace(q) == "" {
-			showAllPhotos()
+			nav.View = ui.ViewPhotos
+			enterView()
 			return
 		}
-		if finder != nil {
-			finder.Query(q)
-		}
+		finder.Query(q)
 	}
 
-	showAll := ui.NewButton(0, 0, 120, 34, "Ver todas", showAllPhotos)
+	showAll := ui.NewButton(0, 0, 120, 34, "Show all", func() {
+		input.Text = ""
+		enterView()
+	})
 	showAll.Font = &theme.Medium
 	showAll.Style = theme.ButtonStyle()
 
 	for !rl.WindowShouldClose() {
 		w := float32(rl.GetScreenWidth())
 		h := float32(rl.GetScreenHeight())
-		topH := float32(ui.AlbumsHeight)
-		if len(people.People) > 0 {
-			topH += ui.PeopleHeight
+		screen := rl.NewRectangle(0, 0, w, h)
+
+		var topH float32
+		switch nav.View {
+		case ui.ViewAlbums:
+			if len(albums.Albums) > 0 {
+				topH = ui.AlbumsHeight
+			}
+		case ui.ViewPeople:
+			if len(people.People) > 0 {
+				topH = ui.PeopleHeight
+			}
 		}
-		top := rl.NewRectangle(0, 0, w, ui.AlbumsHeight)
-		peopleArea := rl.NewRectangle(0, ui.AlbumsHeight, w, topH-ui.AlbumsHeight)
-		bottom := rl.NewRectangle(0, topH+1, w, h-topH-1)
+		top := rl.NewRectangle(0, 0, w, topH)
+		body := rl.NewRectangle(0, topH, w, h-topH)
 
 		thumbs.BeginFrame()
 
-		status := search.Status{State: search.StateUnavailable}
-		if finder != nil {
-			status = finder.Status()
-			if status.Err != nil && !loggedErr {
-				log.Printf("busca: %v", status.Err)
-				loggedErr = true
+		status := finder.Status()
+		if status.Err != nil && !loggedErr {
+			log.Printf("busca: %v", status.Err)
+			loggedErr = true
+		}
+		if status.FaceErr != nil && !loggedFaceErr {
+			log.Printf("rostos: %v", status.FaceErr)
+			loggedFaceErr = true
+		}
+		if r, ok := finder.Poll(); ok {
+			nav.View = ui.ViewPhotos
+			searching = true
+			if r.Err != nil {
+				timeline.SetResults("“"+r.Query+"”", "Error: "+r.Err.Error(), nil)
+			} else {
+				timeline.SetResults("“"+r.Query+"”", fmt.Sprintf("Most relevant  ·  %d ms", r.Took.Milliseconds()), r.Photos)
 			}
-			if status.FaceErr != nil && !loggedFaceErr {
-				log.Printf("rostos: %v", status.FaceErr)
-				loggedFaceErr = true
-			}
-			if r, ok := finder.Poll(); ok {
-				albums.Selected = nil
-				people.Selected = 0
-				searching = true
-				if r.Err != nil {
-					timeline.SetResults("“"+r.Query+"”", "Erro: "+r.Err.Error(), nil)
-				} else {
-					timeline.SetResults("“"+r.Query+"”", fmt.Sprintf("Mais relevantes  ·  %d ms", r.Took.Milliseconds()), r.Photos)
-				}
-			}
-			if v := finder.PeopleVersion(); v != peopleVersion {
-				peopleVersion = v
-				people.SetPeople(finder.People())
+		}
+		if v := finder.PeopleVersion(); v != peopleVersion {
+			peopleVersion = v
+			people.SetPeople(finder.People())
+			if nav.View == ui.ViewPeople && people.Selected == 0 && len(people.People) > 0 {
+				enterView()
 			}
 		}
 		if v := finder.LibraryVersion(); v != libVersion && time.Since(libRefreshed) > 400*time.Millisecond {
@@ -195,14 +230,16 @@ func main() {
 			albums.SetAlbums(lib.Albums)
 			switch {
 			case searching:
-			case albums.Selected != nil:
+			case nav.View == ui.ViewPhotos:
+				timeline.Refresh(lib.Photos)
+			case nav.View == ui.ViewAlbums && albums.Selected != nil:
 				timeline.Refresh(albums.Selected.Photos)
-			case people.Selected != 0:
+			case nav.View == ui.ViewAlbums && len(albums.Albums) > 0:
+				enterView()
+			case nav.View == ui.ViewPeople:
 				if p, ok := people.SelectedPerson(); ok {
 					timeline.Refresh(finder.PhotosOf(p))
 				}
-			default:
-				timeline.Refresh(lib.Photos)
 			}
 		}
 		if !status.Reading && !loggedCatalog {
@@ -210,75 +247,96 @@ func main() {
 			loggedCatalog = true
 		}
 
-		empty := !status.Reading && status.Cataloged == 0
-		timeline.EmptyText = "Coloque fotos em ./storage"
-		if status.Reading {
-			timeline.EmptyText = "Lendo ./storage…"
+		switch {
+		case nav.View == ui.ViewPeople && len(people.People) == 0:
+			timeline.EmptyText = people.Empty
+		case nav.View == ui.ViewPeople:
+			timeline.EmptyText = "Pick a person above"
+		case nav.View == ui.ViewAlbums && len(albums.Albums) == 0:
+			timeline.EmptyText = albums.Empty
+		case nav.View == ui.ViewAlbums:
+			timeline.EmptyText = "Pick an album above"
+		case searching:
+			timeline.EmptyText = "No photos found"
+		case status.Reading:
+			timeline.EmptyText = "Reading ./storage…"
+		default:
+			timeline.EmptyText = "Put photos in ./storage"
 		}
-		timeline.Status = searchStatus(status)
-		input.Placeholder = searchPlaceholder(status, empty)
+		nav.Status = searchStatus(status)
+		nav.Done = false
+		nav.Progress = 0
+		switch {
+		case status.State == search.StateIndexing:
+			if total := max(status.Total, status.Cataloged); total > 0 {
+				nav.Progress = max(0.02, float32(status.Indexed)/float32(total))
+			}
+		case status.State == search.StateLoading || status.Reading:
+			nav.Progress = -1
+		case status.State == search.StateReady:
+			nav.Done = true
+			if nav.Status == "" {
+				nav.Status = fmt.Sprintf("%d photos indexed", status.Indexed)
+			}
+		case status.Err != nil:
+			nav.Status = "Search unavailable: " + status.Err.Error()
+		}
+		input.Placeholder = "Search"
+		if status.State == search.StateUnavailable {
+			input.Placeholder = "Search unavailable"
+		}
 
-		if len(people.People) > 0 && people.Update(peopleArea) {
-			searching = false
+		if nav.Update(screen) {
 			input.Text = ""
-			albums.Selected = nil
-			if p, ok := people.SelectedPerson(); ok {
-				name := p.Name
-				if name == "" {
-					name = fmt.Sprintf("Pessoa %d", p.ID)
-				}
-				timeline.SetPhotos(name, finder.PhotosOf(p))
-			} else {
-				timeline.SetPhotos(allTitle, lib.Photos)
+			input.Focused = false
+			enterView()
+		}
+
+		switch {
+		case topH == 0:
+		case nav.View == ui.ViewPeople:
+			if people.Update(top) {
+				showView()
+			}
+		case nav.View == ui.ViewAlbums:
+			if albums.Update(top) {
+				showView()
 			}
 		}
-
-		if albums.Update(top) {
-			people.Selected = 0
-			searching = false
-			input.Text = ""
-			if albums.Selected != nil {
-				timeline.SetPhotos(albums.Selected.Name, albums.Selected.Photos)
-			} else {
-				timeline.SetPhotos(allTitle, lib.Photos)
-			}
-		}
-
-		barY := bottom.Y + (ui.TimelineBar-36)/2
-		inputW := min(360, w*0.35)
-		input.Bounds = rl.NewRectangle(w-24-inputW, barY, inputW, 36)
-		input.Update()
 
 		timeline.KeysEnabled = !input.Focused
-		timeline.Update(bottom)
+		timeline.Update(body)
 
-		filtered := albums.Selected != nil || people.Selected != 0 || searching
-		showAll.Bounds = rl.NewRectangle(input.Bounds.X-12-showAll.Bounds.Width, bottom.Y+(ui.TimelineBar-34)/2, showAll.Bounds.Width, 34)
-		if filtered {
+		showAll.Bounds = rl.NewRectangle(w-24-showAll.Bounds.Width-14, body.Y+(ui.TimelineBar-34)/2, showAll.Bounds.Width, 34)
+		if searching {
 			showAll.Update()
 		}
 
 		switch {
 		case input.Hovered():
 			rl.SetMouseCursor(rl.MouseCursorIBeam)
-		case albums.Hovered() || people.Hovered() || (filtered && showAll.Hovered()):
+		case nav.Hovered() || timeline.ScrubHovered() || (nav.View == ui.ViewAlbums && albums.Hovered()) || (nav.View == ui.ViewPeople && people.Hovered()) || (searching && showAll.Hovered()):
 			rl.SetMouseCursor(rl.MouseCursorPointingHand)
 		default:
 			rl.SetMouseCursor(rl.MouseCursorDefault)
 		}
 
 		rl.BeginDrawing()
+		backdrop.Begin()
 		rl.ClearBackground(theme.Background)
-		albums.Draw(top)
-		if len(people.People) > 0 {
-			people.Draw(peopleArea)
+		switch {
+		case topH == 0:
+		case nav.View == ui.ViewPeople:
+			people.Draw(top)
+		case nav.View == ui.ViewAlbums:
+			albums.Draw(top)
 		}
-		rl.DrawRectangle(0, int32(topH), int32(w), 1, theme.Divider)
-		timeline.Draw(bottom)
-		input.Draw()
-		if filtered {
+		timeline.Draw(body)
+		if searching {
 			showAll.Draw()
 		}
+		backdrop.End()
+		nav.Draw(backdrop)
 		rl.EndDrawing()
 	}
 }

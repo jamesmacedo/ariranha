@@ -86,6 +86,7 @@ func (t *Theme) SetDark(dark bool) {
 func (t *Theme) Unload() {
 	rl.UnloadFont(t.Regular)
 	rl.UnloadFont(t.Medium)
+	unloadRounded()
 }
 
 func (t *Theme) ButtonStyle() ButtonStyle {
@@ -122,7 +123,7 @@ func codepoints() []rune {
 	for r := rune(160); r < 256; r++ {
 		cp = append(cp, r)
 	}
-	return append(cp, '…', '•', '–', '—', '−')
+	return append(cp, '…', '•', '–', '—', '−', '“', '”', '‘', '’')
 }
 
 func DrawText(font rl.Font, text string, x, y, size float32, c rl.Color) {
@@ -149,22 +150,10 @@ func FitText(font rl.Font, text string, size, maxWidth float32) string {
 }
 
 func DrawCover(tex rl.Texture2D, dst rl.Rectangle, tint rl.Color) {
-	tw, th := float32(tex.Width), float32(tex.Height)
-	src := rl.NewRectangle(0, 0, tw, th)
-	if dst.Height <= 0 || th <= 0 {
+	if dst.Height <= 0 || tex.Height <= 0 {
 		return
 	}
-	da := dst.Width / dst.Height
-	if tw/th > da {
-		w := th * da
-		src.X = (tw - w) / 2
-		src.Width = w
-	} else {
-		h := tw / da
-		src.Y = (th - h) / 2
-		src.Height = h
-	}
-	rl.DrawTexturePro(tex, src, dst, rl.Vector2{}, 0, tint)
+	rl.DrawTexturePro(tex, coverSource(tex, dst), dst, rl.Vector2{}, 0, tint)
 }
 
 func smooth(current, target float32) float32 {

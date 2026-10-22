@@ -7,7 +7,7 @@ import (
 	"runtime"
 )
 
-var ErrUnavailable = errors.New("busca semântica indisponível neste build")
+var ErrUnavailable = errors.New("semantic search unavailable in this build")
 
 type Paths struct {
 	Models     string

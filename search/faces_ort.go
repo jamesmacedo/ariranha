@@ -26,7 +26,7 @@ type FaceResult struct {
 
 func NewFaceEncoder(p Paths, threads int) (*FaceEncoder, error) {
 	if !exists(p.FaceDetector()) || !exists(p.FaceRecognizer()) {
-		return nil, errors.New("modelos de rosto não encontrados, rode make models")
+		return nil, errors.New("face models not found, run make models")
 	}
 	if err := initEnvironment(p.Runtime); err != nil {
 		return nil, err
@@ -38,12 +38,12 @@ func NewFaceEncoder(p Paths, threads int) (*FaceEncoder, error) {
 	detOut := []string{"448", "471", "494", "451", "474", "497", "454", "477", "500"}
 	det, err := newSessionIO(p.FaceDetector(), []string{"input.1"}, detOut, threads)
 	if err != nil {
-		return nil, fmt.Errorf("detector de rostos: %w", err)
+		return nil, fmt.Errorf("face detector: %w", err)
 	}
 	rec, err := newSessionIO(p.FaceRecognizer(), []string{"input.1"}, []string{"683"}, threads)
 	if err != nil {
 		det.Destroy()
-		return nil, fmt.Errorf("reconhecedor de rostos: %w", err)
+		return nil, fmt.Errorf("face recognizer: %w", err)
 	}
 
 	return &FaceEncoder{
@@ -99,7 +99,7 @@ func (f *FaceEncoder) Embed(img *image.RGBA, d Detection) ([]float32, error) {
 
 	data := outputs[0].(*ort.Tensor[float32]).GetData()
 	if len(data) != FaceDim {
-		return nil, fmt.Errorf("vetor de rosto com %d valores", len(data))
+		return nil, fmt.Errorf("face vector has %d values", len(data))
 	}
 	return Normalize(data), nil
 }

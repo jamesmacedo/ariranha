@@ -26,7 +26,7 @@ type Encoder struct {
 func initEnvironment(lib string) error {
 	envOnce.Do(func() {
 		if lib == "" {
-			envErr = errors.New("biblioteca do ONNX Runtime não encontrada")
+			envErr = errors.New("ONNX Runtime library not found")
 			return
 		}
 		ort.SetSharedLibraryPath(lib)
@@ -37,7 +37,7 @@ func initEnvironment(lib string) error {
 
 func NewEncoder(p Paths, threads int) (*Encoder, error) {
 	if p.Models == "" {
-		return nil, errors.New("modelos não encontrados, rode make models")
+		return nil, errors.New("models not found, run make models")
 	}
 	if err := initEnvironment(p.Runtime); err != nil {
 		return nil, err
@@ -124,11 +124,11 @@ func (e *Encoder) run(s *ort.DynamicAdvancedSession, input ort.Value, n int) ([]
 
 	t, ok := outputs[0].(*ort.Tensor[float32])
 	if !ok {
-		return nil, errors.New("saída inesperada do modelo")
+		return nil, errors.New("unexpected model output")
 	}
 	data := t.GetData()
 	if len(data) != n*e.dim {
-		return nil, fmt.Errorf("saída com %d valores, esperado %d", len(data), n*e.dim)
+		return nil, fmt.Errorf("output has %d values, expected %d", len(data), n*e.dim)
 	}
 
 	vecs := make([][]float32, n)

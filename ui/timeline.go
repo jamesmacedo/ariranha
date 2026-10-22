@@ -18,16 +18,20 @@ const (
 	tlPad       = 24
 	TimelineBar = 56
 	tlTrack     = 14
+	tileRadius  = 12
 )
 
 type tile struct {
 	photo *gallery.Photo
 	rect  rl.Rectangle
+	month int
 }
 
 type dayHeader struct {
-	text string
-	rect rl.Rectangle
+	text  string
+	sub   string
+	count string
+	rect  rl.Rectangle
 }
 
 type Timeline struct {
@@ -35,6 +39,7 @@ type Timeline struct {
 	Status      string
 	EmptyText   string
 	KeysEnabled bool
+	BottomInset float32
 
 	theme   *Theme
 	section string
@@ -51,6 +56,7 @@ type Timeline struct {
 	dragOffset float32
 	direction  int
 	hover      int
+	scrub      scrubber
 }
 
 func NewTimeline(theme *Theme, thumbs *gallery.ThumbCache) *Timeline {
@@ -108,20 +114,63 @@ func (t *Timeline) layout(width float32) {
 		}
 	}
 
-	res := layout.Justify(layout.Responsive(width-tlTrack), sections)
+	cfg := layout.Responsive(width - t.gutter())
+	cfg.PackSections = false
+	cfg.Gap = 6
+	cfg.Padding = 16
+	cfg.HeaderHeight = 42
+	cfg.SectionGap = 12
+	res := layout.Justify(cfg, sections)
 
 	now := time.Now()
+	var marks []monthMark
+	months := make([]int, len(days))
 	for _, h := range res.Headers {
-		text := t.section
-		if text == "" {
-			text = formatDay(days[h.Section][0].Date, now)
+		day := days[h.Section]
+		hd := dayHeader{text: t.section, count: itemsLabel(len(day)), rect: toRect(h.Rect)}
+		if t.dated() {
+			d := day[0].Date
+			hd.text, hd.sub = formatDay(d, now), daySub(d, now)
+			y, m, _ := d.Date()
+			if n := len(marks); n == 0 || marks[n-1].year != y || marks[n-1].month != m {
+				marks = append(marks, monthMark{year: y, month: m, y: h.Rect.Y})
+			}
+			months[h.Section] = len(marks) - 1
 		}
-		t.headers = append(t.headers, dayHeader{text: text, rect: toRect(h.Rect)})
+		t.headers = append(t.headers, hd)
 	}
 	for _, b := range res.Boxes {
-		t.tiles = append(t.tiles, tile{photo: days[b.Section][b.Index], rect: toRect(b.Rect)})
+		t.tiles = append(t.tiles, tile{photo: days[b.Section][b.Index], rect: toRect(b.Rect), month: months[b.Section]})
 	}
 	t.height = res.Height
+	t.scrub.set(marks)
+}
+
+func (t *Timeline) dated() bool {
+	return t.section == ""
+}
+
+func (t *Timeline) gutter() float32 {
+	if t.dated() {
+		return scrubW
+	}
+	return tlTrack
+}
+
+func (t *Timeline) scrubArea(v rl.Rectangle) rl.Rectangle {
+	return rl.NewRectangle(v.X+v.Width-scrubW, v.Y+10, scrubW, max(0, v.Height-50))
+}
+
+func (t *Timeline) ScrubHovered() bool {
+	return t.dated() && t.scrub.hover >= 0
+}
+
+func (t *Timeline) activeMonth() int {
+	first, _ := t.visible(t.scroll+1, t.scroll+2)
+	if first >= len(t.tiles) {
+		return -1
+	}
+	return t.tiles[first].month
 }
 
 func toRect(r layout.Rect) rl.Rectangle {
@@ -129,11 +178,11 @@ func toRect(r layout.Rect) rl.Rectangle {
 }
 
 func (t *Timeline) maxScroll(v rl.Rectangle) float32 {
-	return max(0, t.height-v.Height)
+	return max(0, t.height+t.BottomInset-v.Height)
 }
 
 func (t *Timeline) track(v rl.Rectangle) rl.Rectangle {
-	return rl.NewRectangle(v.X+v.Width-tlTrack, v.Y, tlTrack, v.Height)
+	return rl.NewRectangle(v.X+v.Width-t.gutter(), v.Y, t.gutter(), v.Height)
 }
 
 func (t *Timeline) thumb(v rl.Rectangle) rl.Rectangle {
@@ -184,7 +233,27 @@ func (t *Timeline) Update(bounds rl.Rectangle) {
 		t.target = maxS
 	}
 
-	if rl.IsMouseButtonPressed(rl.MouseButtonLeft) && maxS > 0 && rl.CheckCollisionPointRec(mouse, t.track(v)) {
+	t.scrub.hover = -1
+	if t.dated() {
+		area := t.scrubArea(v)
+		if t.scrub.placedH != area.Height {
+			t.scrub.place(area.Height)
+		}
+		if rl.CheckCollisionPointRec(mouse, area) || t.scrub.dragging {
+			t.scrub.hover = t.scrub.itemAt(mouse.Y - area.Y)
+		}
+		if rl.IsMouseButtonPressed(rl.MouseButtonLeft) && t.scrub.hover >= 0 && rl.CheckCollisionPointRec(mouse, area) {
+			t.scrub.dragging = true
+		}
+		if rl.IsMouseButtonReleased(rl.MouseButtonLeft) {
+			t.scrub.dragging = false
+		}
+		if t.scrub.dragging && t.scrub.hover >= 0 {
+			t.target = t.scrub.markY(t.scrub.hover) - 8
+		}
+	}
+
+	if !t.dated() && rl.IsMouseButtonPressed(rl.MouseButtonLeft) && maxS > 0 && rl.CheckCollisionPointRec(mouse, t.track(v)) {
 		th := t.thumb(v)
 		t.dragging = true
 		if mouse.Y >= th.Y && mouse.Y <= th.Y+th.Height {
@@ -243,7 +312,7 @@ func (t *Timeline) Draw(bounds rl.Rectangle) {
 	if len(t.photos) == 0 {
 		msg := t.EmptyText
 		if msg == "" {
-			msg = "Nenhuma foto encontrada"
+			msg = "No photos found"
 		}
 		mw := MeasureText(th.Regular, msg, 18)
 		DrawText(th.Regular, msg, v.X+(v.Width-mw)/2, v.Y+v.Height/2-9, 18, th.TextMuted)
@@ -258,20 +327,30 @@ func (t *Timeline) Draw(bounds rl.Rectangle) {
 		if h.rect.Y+h.rect.Height < top || h.rect.Y > bottom {
 			continue
 		}
-		text := FitText(th.Medium, h.text, 17, h.rect.Width)
-		DrawText(th.Medium, text, v.X+h.rect.X, v.Y+h.rect.Y-t.scroll+h.rect.Height-30, 17, th.Text)
+		x := v.X + h.rect.X
+		y := v.Y + h.rect.Y - t.scroll + h.rect.Height - 30
+		cw := MeasureText(th.Regular, h.count, 13)
+		DrawText(th.Regular, h.count, x+h.rect.Width-cw, y+2, 13, th.TextMuted)
+		room := h.rect.Width - cw - 16
+		text := FitText(th.Medium, h.text, 16, room)
+		DrawText(th.Medium, text, x, y, 16, th.Text)
+		if h.sub != "" {
+			tw := MeasureText(th.Medium, text, 16) + 10
+			DrawText(th.Regular, FitText(th.Regular, h.sub, 14, room-tw), x+tw, y+1.5, 14, th.TextMuted)
+		}
 	}
 
 	first, last := t.visible(top, bottom)
 	for i := first; i < last; i++ {
 		tl := t.tiles[i]
 		r := rl.NewRectangle(v.X+tl.rect.X, v.Y+tl.rect.Y-t.scroll, tl.rect.Width, tl.rect.Height)
-		rl.DrawRectangleRec(r, tl.photo.Color)
 		if tex, ok := t.thumbs.Get(tl.photo); ok {
-			DrawCover(tex, r, rl.White)
+			DrawCoverRounded(tex, r, tileRadius, rl.White)
+		} else {
+			DrawRoundedRect(r, tileRadius, tl.photo.Color)
 		}
 		if i == t.hover {
-			rl.DrawRectangleRec(r, rl.Fade(rl.White, 0.08))
+			DrawRoundedRect(r, tileRadius, rl.Fade(rl.White, 0.08))
 		}
 	}
 
@@ -299,7 +378,9 @@ func (t *Timeline) Draw(bounds rl.Rectangle) {
 
 	rl.EndScissorMode()
 
-	if t.maxScroll(v) > 0 {
+	if t.dated() {
+		t.scrub.draw(th, t.scrubArea(v), t.activeMonth())
+	} else if t.maxScroll(v) > 0 {
 		bar := t.thumb(v)
 		c := rl.Fade(th.TextMuted, 0.35)
 		if t.dragging || rl.CheckCollisionPointRec(rl.GetMousePosition(), t.track(v)) {
@@ -315,27 +396,40 @@ func sameDay(a, b time.Time) bool {
 	return ay == by && am == bm && ad == bd
 }
 
-var weekdays = [...]string{"dom.", "seg.", "ter.", "qua.", "qui.", "sex.", "sáb."}
-var months = [...]string{"jan.", "fev.", "mar.", "abr.", "mai.", "jun.", "jul.", "ago.", "set.", "out.", "nov.", "dez."}
+var weekdays = [...]string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
+var months = [...]string{"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
 
-func formatDay(d, now time.Time) string {
+func dayDiff(d, now time.Time) int {
 	y, m, day := d.Date()
 	ny, nm, nd := now.Date()
 	a := time.Date(y, m, day, 0, 0, 0, 0, time.UTC)
 	b := time.Date(ny, nm, nd, 0, 0, 0, 0, time.UTC)
+	return int(math.Round(b.Sub(a).Hours() / 24))
+}
 
-	switch int(math.Round(b.Sub(a).Hours() / 24)) {
+func dayLabel(d, now time.Time) string {
+	s := fmt.Sprintf("%s, %s %d", weekdays[d.Weekday()], months[d.Month()-1], d.Day())
+	if d.Year() != now.Year() {
+		s += fmt.Sprintf(", %d", d.Year())
+	}
+	return s
+}
+
+func formatDay(d, now time.Time) string {
+	switch dayDiff(d, now) {
 	case 0:
-		return "Hoje"
+		return "Today"
 	case 1:
-		return "Ontem"
+		return "Yesterday"
 	}
+	return capitalize(dayLabel(d, now))
+}
 
-	s := fmt.Sprintf("%s, %d de %s", weekdays[d.Weekday()], day, months[m-1])
-	if y != ny {
-		s += fmt.Sprintf(" de %d", y)
+func daySub(d, now time.Time) string {
+	if n := dayDiff(d, now); n == 0 || n == 1 {
+		return dayLabel(d, now)
 	}
-	return capitalize(s)
+	return ""
 }
 
 func capitalize(s string) string {
