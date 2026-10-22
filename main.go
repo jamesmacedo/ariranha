@@ -29,6 +29,10 @@ func searchStatus(st search.Status) string {
 	case search.StateLoading:
 		parts = append(parts, "loading models…")
 	case search.StateIndexing:
+		if st.Paused {
+			parts = append(parts, fmt.Sprintf("paused  %d/%d indexed", st.Indexed, max(st.Total, st.Cataloged)), "click to start")
+			break
+		}
 		parts = append(parts, fmt.Sprintf("indexing %d/%d", st.Indexed, max(st.Total, st.Cataloged)))
 		parts = append(parts, fmt.Sprintf("%d faces", st.Faces))
 		if st.Remaining > 0 {
@@ -311,6 +315,8 @@ func main() {
 		case status.Err != nil:
 			nav.Status = "Search unavailable: " + status.Err.Error()
 		}
+		nav.Playable = status.State == search.StateLoading || status.State == search.StateIndexing
+		nav.Paused = status.Paused
 		input.Placeholder = "Search"
 		if status.State == search.StateUnavailable {
 			input.Placeholder = "Search unavailable"
@@ -338,6 +344,10 @@ func main() {
 			input.Text = ""
 			input.Focused = false
 			enterView()
+		}
+		if nav.Toggled {
+			finder.SetPaused(!status.Paused)
+			log.Printf("indexação %s", map[bool]string{true: "retomada", false: "pausada"}[status.Paused])
 		}
 
 		switch {

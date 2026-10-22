@@ -26,6 +26,7 @@ const (
 type Status struct {
 	State      State
 	Reading    bool
+	Paused     bool
 	Discovered int
 	Cataloged  int
 	Indexed    int
@@ -78,6 +79,7 @@ type Service struct {
 
 	catalogReady chan struct{}
 	queries      chan string
+	wake         chan struct{}
 	results      chan Result
 	stop         chan struct{}
 	wg           sync.WaitGroup
@@ -96,10 +98,12 @@ func Start(root string, paths Paths) *Service {
 		queue:        newPhotoQueue(),
 		catalogReady: make(chan struct{}),
 		queries:      make(chan string, 1),
+		wake:         make(chan struct{}, 1),
 		results:      make(chan Result, 1),
 		stop:         make(chan struct{}),
 	}
 	s.status.Reading = true
+	s.status.Paused = true
 
 	if paths.Database != "" {
 		if store, err := OpenStore(paths.Database, paths.ModelName); err == nil {
@@ -251,6 +255,27 @@ func (s *Service) Close() {
 	if s.store != nil {
 		s.store.Close()
 	}
+}
+
+func (s *Service) SetPaused(paused bool) {
+	s.setStatus(func(st *Status) { st.Paused = paused })
+	if !paused {
+		select {
+		case s.wake <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (s *Service) waitRunning() bool {
+	for s.Status().Paused {
+		select {
+		case <-s.wake:
+		case <-s.stop:
+			return false
+		}
+	}
+	return !s.stopped()
 }
 
 func (s *Service) stopped() bool {
@@ -434,6 +459,9 @@ func (s *Service) indexLoop() {
 	var perPhoto float64
 
 	for {
+		if !s.waitRunning() {
+			return
+		}
 		batch := s.nextBatch()
 		if batch == nil {
 			break

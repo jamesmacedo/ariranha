@@ -37,6 +37,9 @@ type NavBar struct {
 	Progress float32
 	Done     bool
 	Status   string
+	Playable bool
+	Paused   bool
+	Toggled  bool
 
 	theme   *Theme
 	bounds  rl.Rectangle
@@ -59,7 +62,7 @@ func (n *NavBar) Bounds() rl.Rectangle {
 }
 
 func (n *NavBar) Hovered() bool {
-	return n.hover >= 0 && n.hover < 3
+	return (n.hover >= 0 && n.hover < 3) || (n.hover == 3 && n.Playable)
 }
 
 func (n *NavBar) Contains(p rl.Vector2) bool {
@@ -134,6 +137,7 @@ func (n *NavBar) Update(screen rl.Rectangle) bool {
 	}
 
 	changed := false
+	n.Toggled = false
 	if rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
 		n.armed = n.hover
 	}
@@ -141,6 +145,9 @@ func (n *NavBar) Update(screen rl.Rectangle) bool {
 		if n.armed >= 0 && n.armed < 3 && n.armed == n.hover && View(n.hover) != n.View {
 			n.View = View(n.hover)
 			changed = true
+		}
+		if n.armed == 3 && n.hover == 3 && n.Playable {
+			n.Toggled = true
 		}
 		n.armed = -1
 	}
@@ -195,7 +202,10 @@ func (n *NavBar) Draw(bd *Backdrop) {
 func (n *NavBar) drawRing() {
 	t := n.theme
 	c := rl.NewVector2(n.ring.X+n.ring.Width/2, n.ring.Y+n.ring.Height/2)
-	const r0, r1 = 8.5, 11.5
+	const r0, r1 = 10.5, 13
+	if n.Playable && n.hover == 3 {
+		rl.DrawCircleV(c, 17, rl.Fade(t.Text, 0.08))
+	}
 	rl.DrawRing(c, r0, r1, 0, 360, 48, rl.Fade(t.TextMuted, 0.25))
 	switch {
 	case n.Done:
@@ -207,6 +217,16 @@ func (n *NavBar) drawRing() {
 	case n.Progress > 0:
 		rl.DrawRing(c, r0, r1, -90, -90+360*min(1, n.Progress), 48, t.Accent)
 	}
+	if !n.Playable {
+		return
+	}
+	if n.Paused {
+		rl.DrawTriangle(rl.NewVector2(c.X-2.5, c.Y-4.5), rl.NewVector2(c.X-2.5, c.Y+4.5), rl.NewVector2(c.X+4.5, c.Y), t.Text)
+		rl.DrawTriangle(rl.NewVector2(c.X-2.5, c.Y-4.5), rl.NewVector2(c.X+4.5, c.Y), rl.NewVector2(c.X-2.5, c.Y+4.5), t.Text)
+		return
+	}
+	rl.DrawRectangleRounded(rl.NewRectangle(c.X-4, c.Y-4.5, 2.8, 9), 0.5, 4, t.Text)
+	rl.DrawRectangleRounded(rl.NewRectangle(c.X+1.2, c.Y-4.5, 2.8, 9), 0.5, 4, t.Text)
 }
 
 func (n *NavBar) drawTooltip() {
