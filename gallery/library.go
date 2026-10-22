@@ -32,6 +32,10 @@ type Photo struct {
 	Height      int
 	Orientation int
 	Favorite    bool
+	Kind        Kind
+	Duration    time.Duration
+	HasAudio    bool
+	HDR         bool
 	Color       color.RGBA
 }
 
@@ -82,7 +86,7 @@ func Discover(root string) ([]File, error) {
 			}
 			return nil
 		}
-		if !extensions[strings.ToLower(filepath.Ext(path))] {
+		if ext := strings.ToLower(filepath.Ext(path)); !extensions[ext] && !videoExtensions[ext] {
 			return nil
 		}
 		info, err := d.Info()
@@ -137,6 +141,9 @@ func ReadPhotos(files []File) []*Photo {
 }
 
 func ReadPhoto(file File) *Photo {
+	if IsVideoFile(file.Path) {
+		return ReadVideo(file)
+	}
 	f, err := os.Open(file.Path)
 	if err != nil {
 		return nil

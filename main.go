@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -29,6 +30,10 @@ func searchStatus(st search.Status) string {
 	case search.StateLoading:
 		parts = append(parts, "loading models…")
 	case search.StateIndexing:
+		if st.Loading {
+			parts = append(parts, "loading models…")
+			break
+		}
 		if st.Paused {
 			parts = append(parts, fmt.Sprintf("paused  %d/%d indexed", st.Indexed, max(st.Total, st.Cataloged)), "click to start")
 			break
@@ -81,6 +86,13 @@ func main() {
 	closeLog := setupLog(dirs)
 	defer closeLog()
 	log.Printf("raiz %s", dirs.Root)
+	gallery.SetToolsDir(dirs.Runtime)
+	gallery.SetDiskCache(filepath.Join(dirs.Cache, "thumbs"))
+	if bin, err := gallery.Tool("ffprobe"); err != nil {
+		log.Printf("vídeos desativados: %v", err)
+	} else {
+		log.Printf("ffprobe %s", bin)
+	}
 
 	rl.SetConfigFlags(rl.FlagWindowResizable | rl.FlagVsyncHint | rl.FlagMsaa4xHint)
 	rl.SetTraceLogLevel(rl.LogWarning)
@@ -301,6 +313,8 @@ func main() {
 		nav.Done = false
 		nav.Progress = 0
 		switch {
+		case status.Loading:
+			nav.Progress = -1
 		case status.State == search.StateIndexing:
 			if total := max(status.Total, status.Cataloged); total > 0 {
 				nav.Progress = max(0.02, float32(status.Indexed)/float32(total))

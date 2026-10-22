@@ -5,19 +5,27 @@ import (
 	"runtime"
 	"sort"
 	"sync"
+	"time"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
+)
+
+const (
+	ramTTL = 2 * time.Second
+	gpuTTL = 3 * time.Second
 )
 
 type gpuEntry struct {
 	tex      rl.Texture2D
 	lastUsed uint64
+	seen     time.Time
 }
 
 type ramEntry struct {
 	img      *image.RGBA
 	bytes    int64
 	lastUsed uint64
+	seen     time.Time
 }
 
 type thumbResult struct {
@@ -43,6 +51,7 @@ type ThumbCache struct {
 	failed   map[*Photo]bool
 	ramBytes int64
 	frame    uint64
+	now      time.Time
 	uploads  int
 }
 
@@ -85,6 +94,7 @@ func (c *ThumbCache) worker() {
 
 func (c *ThumbCache) BeginFrame() {
 	c.frame++
+	c.now = time.Now()
 	c.uploads = 0
 
 	c.mu.Lock()
@@ -120,11 +130,17 @@ func (c *ThumbCache) store(r thumbResult) {
 	if old, ok := c.ram[r.photo]; ok {
 		c.ramBytes -= old.bytes
 	}
-	c.ram[r.photo] = &ramEntry{img: r.img, bytes: size, lastUsed: c.frame}
+	c.ram[r.photo] = &ramEntry{img: r.img, bytes: size, lastUsed: c.frame, seen: c.now}
 	c.ramBytes += size
 }
 
 func (c *ThumbCache) evictRAM() {
+	for p, e := range c.ram {
+		if c.now.Sub(e.seen) > ramTTL {
+			c.ramBytes -= e.bytes
+			delete(c.ram, p)
+		}
+	}
 	if c.ramBytes <= c.ramBudget {
 		return
 	}
@@ -149,6 +165,12 @@ func (c *ThumbCache) evictRAM() {
 }
 
 func (c *ThumbCache) evictGPU() {
+	for p, e := range c.gpu {
+		if c.now.Sub(e.seen) > gpuTTL {
+			rl.UnloadTexture(e.tex)
+			delete(c.gpu, p)
+		}
+	}
 	if len(c.gpu) <= c.gpuLimit {
 		return
 	}
@@ -178,7 +200,11 @@ func (c *ThumbCache) upload(p *Photo, img *image.RGBA) rl.Texture2D {
 	tex := rl.LoadTextureFromImage(rimg)
 	rl.GenTextureMipmaps(&tex)
 	rl.SetTextureFilter(tex, rl.FilterTrilinear)
-	c.gpu[p] = &gpuEntry{tex: tex, lastUsed: c.frame}
+	c.gpu[p] = &gpuEntry{tex: tex, lastUsed: c.frame, seen: c.now}
+	if r, ok := c.ram[p]; ok {
+		c.ramBytes -= r.bytes
+		delete(c.ram, p)
+	}
 	c.uploads++
 	return tex
 }
@@ -198,14 +224,11 @@ func (c *ThumbCache) Get(p *Photo) (rl.Texture2D, bool) {
 		return rl.Texture2D{}, false
 	}
 	if e, ok := c.gpu[p]; ok {
-		e.lastUsed = c.frame
-		if r, ok := c.ram[p]; ok {
-			r.lastUsed = c.frame
-		}
+		c.touchGPU(e)
 		return e.tex, true
 	}
 	if r, ok := c.ram[p]; ok {
-		r.lastUsed = c.frame
+		c.touchRAM(r)
 		if c.uploads < c.uploadLimit {
 			return c.upload(p, r.img), true
 		}
@@ -219,14 +242,25 @@ func (c *ThumbCache) Prefetch(p *Photo) {
 	if p.Path == "" || c.failed[p] {
 		return
 	}
-	if r, ok := c.ram[p]; ok {
-		r.lastUsed = c.frame
+	if e, ok := c.gpu[p]; ok {
+		c.touchGPU(e)
 		return
 	}
-	if _, ok := c.gpu[p]; ok {
+	if r, ok := c.ram[p]; ok {
+		c.touchRAM(r)
 		return
 	}
 	c.request(p)
+}
+
+func (c *ThumbCache) touchGPU(e *gpuEntry) {
+	e.lastUsed = c.frame
+	e.seen = c.now
+}
+
+func (c *ThumbCache) touchRAM(e *ramEntry) {
+	e.lastUsed = c.frame
+	e.seen = c.now
 }
 
 func (c *ThumbCache) SetUploadLimit(n int) {

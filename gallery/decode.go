@@ -36,10 +36,24 @@ func LoadScaled(path string, orientation, maxSide int) *image.RGBA {
 }
 
 func LoadPreview(p *Photo, maxSide int) *image.RGBA {
+	if img := loadDisk(p, maxSide); img != nil {
+		return img
+	}
+	if p.IsVideo() {
+		img := LoadVideoFrame(p, VideoPosterTime(p), maxSide)
+		if img != nil {
+			saveDisk(p, maxSide, img)
+		}
+		return img
+	}
 	if img := exifThumbnail(p, maxSide); img != nil {
 		return img
 	}
-	return LoadScaled(p.Path, p.Orientation, maxSide)
+	img := LoadScaled(p.Path, p.Orientation, maxSide)
+	if img != nil && maxSide <= diskMaxPhotoSide {
+		saveDisk(p, maxSide, img)
+	}
+	return img
 }
 
 func exifThumbnail(p *Photo, maxSide int) *image.RGBA {

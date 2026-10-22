@@ -9,6 +9,11 @@ ORT_URL := https://github.com/microsoft/onnxruntime/releases/download/v$(ORT_VER
 MODEL_URL := https://huggingface.co/pulsejet/siglip-base-patch16-256-multilingual-onnx/resolve/main
 MODELS := models/vision_model_quantized.onnx models/text_model_quantized.onnx models/tokenizer.json
 
+FFMPEG_VERSION := 8.1
+FFMPEG_URL := https://github.com/BtbN/FFmpeg-Builds/releases/download/latest
+FFMPEG_LINUX := lib/linux-amd64/ffmpeg lib/linux-amd64/ffprobe
+FFMPEG_WINDOWS := lib/windows-amd64/ffmpeg.exe lib/windows-amd64/ffprobe.exe
+
 BUFFALO_URL := https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip
 FACE_MODELS := models/det_10g.onnx models/w600k_r50.onnx
 
@@ -27,12 +32,14 @@ define layout
 	rm -f $(1)/libonnxruntime.so $(1)/onnxruntime.dll $(1)/libonnxruntime.dylib
 endef
 
-.PHONY: run setup models linux windows darwin-arm64 all clean
+.PHONY: run setup models ffmpeg linux windows darwin-arm64 all clean
 
 run: linux
 	cd $(DIST)/linux-amd64 && ./$(APP)
 
-setup: models $(ORT_LINUX)
+setup: models $(ORT_LINUX) $(FFMPEG_LINUX)
+
+ffmpeg: $(FFMPEG_LINUX) $(FFMPEG_WINDOWS)
 
 models: $(PACKAGED_MODELS)
 
@@ -58,6 +65,18 @@ $(ORT_LINUX):
 	cp lib/tmp/onnxruntime-linux-x64-$(ORT_VERSION)/lib/libonnxruntime.so.$(ORT_VERSION) $@
 	rm -rf lib/tmp
 
+$(FFMPEG_LINUX) &:
+	mkdir -p lib/linux-amd64 lib/tmp
+	curl -fL --progress-bar $(FFMPEG_URL)/ffmpeg-n$(FFMPEG_VERSION)-latest-linux64-lgpl-$(FFMPEG_VERSION).tar.xz | tar -xJ -C lib/tmp --wildcards '*/bin/ffmpeg' '*/bin/ffprobe'
+	cp lib/tmp/*/bin/ffmpeg lib/tmp/*/bin/ffprobe lib/linux-amd64/
+	rm -rf lib/tmp
+
+$(FFMPEG_WINDOWS) &:
+	mkdir -p lib/windows-amd64 lib/tmp
+	curl -fL --progress-bar -o lib/tmp/ffmpeg.zip $(FFMPEG_URL)/ffmpeg-n$(FFMPEG_VERSION)-latest-win64-lgpl-$(FFMPEG_VERSION).zip
+	unzip -o -j lib/tmp/ffmpeg.zip '*/bin/ffmpeg.exe' '*/bin/ffprobe.exe' -d lib/windows-amd64
+	rm -rf lib/tmp
+
 $(ORT_WINDOWS):
 	mkdir -p lib/windows-amd64 lib/tmp
 	curl -fsSL -o lib/tmp/ort.zip $(ORT_URL)/onnxruntime-win-x64-$(ORT_VERSION).zip
@@ -70,13 +89,13 @@ $(ORT_DARWIN):
 	cp lib/tmp/onnxruntime-osx-arm64-$(ORT_VERSION)/lib/libonnxruntime.$(ORT_VERSION).dylib $@
 	rm -rf lib/tmp
 
-linux: $(ORT_LINUX) $(PACKAGED_MODELS)
+linux: $(ORT_LINUX) $(FFMPEG_LINUX) $(PACKAGED_MODELS)
 	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o $(DIST)/linux-amd64/$(APP) .
-	$(call layout,$(DIST)/linux-amd64,$(ORT_LINUX))
+	$(call layout,$(DIST)/linux-amd64,$(ORT_LINUX) $(FFMPEG_LINUX))
 
-windows: $(DIST)/windows-amd64/raylib.dll $(ORT_WINDOWS) $(PACKAGED_MODELS)
+windows: $(DIST)/windows-amd64/raylib.dll $(ORT_WINDOWS) $(FFMPEG_WINDOWS) $(PACKAGED_MODELS)
 	CGO_ENABLED=$(WINDOWS_CGO) GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -H=windowsgui" -o $(DIST)/windows-amd64/$(APP).exe .
-	$(call layout,$(DIST)/windows-amd64,$(ORT_WINDOWS))
+	$(call layout,$(DIST)/windows-amd64,$(ORT_WINDOWS) $(FFMPEG_WINDOWS))
 
 $(DIST)/windows-amd64/raylib.dll:
 	mkdir -p $(DIST)/windows-amd64 $(DIST)/tmp

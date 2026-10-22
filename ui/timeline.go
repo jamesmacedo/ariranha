@@ -399,6 +399,9 @@ func (t *Timeline) Draw(bounds rl.Rectangle) {
 		} else {
 			DrawRoundedRect(r, tileRadius, tl.photo.Color)
 		}
+		if tl.photo.IsVideo() {
+			drawVideoBadge(th, r, tl.photo)
+		}
 		if i == t.hover {
 			DrawRoundedRect(r, tileRadius, rl.Fade(rl.White, 0.08))
 		}

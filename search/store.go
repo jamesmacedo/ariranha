@@ -72,6 +72,14 @@ CREATE TABLE IF NOT EXISTS favorites (
 	added INTEGER NOT NULL
 ) WITHOUT ROWID;
 
+CREATE TABLE IF NOT EXISTS queries (
+	text  TEXT    NOT NULL,
+	model TEXT    NOT NULL,
+	vec   BLOB    NOT NULL,
+	used  INTEGER NOT NULL,
+	PRIMARY KEY (text, model)
+) WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS face_scans (
 	path  TEXT    PRIMARY KEY,
 	size  INTEGER NOT NULL,
@@ -93,7 +101,47 @@ func OpenStore(path, model string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db, model: model}, nil
+}
+
+var photoColumns = []struct{ name, def string }{
+	{"kind", "INTEGER NOT NULL DEFAULT 0"},
+	{"duration", "INTEGER NOT NULL DEFAULT 0"},
+	{"audio", "INTEGER NOT NULL DEFAULT 0"},
+	{"hdr", "INTEGER NOT NULL DEFAULT 0"},
+}
+
+func migrate(db *sql.DB) error {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info('photos')`)
+	if err != nil {
+		return err
+	}
+	have := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return err
+		}
+		have[name] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, c := range photoColumns {
+		if have[c.name] {
+			continue
+		}
+		if _, err := db.Exec(`ALTER TABLE photos ADD COLUMN ` + c.name + ` ` + c.def); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) Close() error {
@@ -283,7 +331,7 @@ func (s *Store) SaveFaces(k Key, faces []*Face) error {
 }
 
 func (s *Store) LoadPhotos(root string) ([]*gallery.Photo, error) {
-	rows, err := s.db.Query(`SELECT p.id, p.path, p.size, p.mtime, p.taken, p.width, p.height, p.orientation, f.path IS NOT NULL FROM photos p LEFT JOIN favorites f ON f.path = p.path`)
+	rows, err := s.db.Query(`SELECT p.id, p.path, p.size, p.mtime, p.taken, p.width, p.height, p.orientation, p.kind, p.duration, p.audio, p.hdr, f.path IS NOT NULL FROM photos p LEFT JOIN favorites f ON f.path = p.path`)
 	if err != nil {
 		return nil, err
 	}
@@ -292,14 +340,15 @@ func (s *Store) LoadPhotos(root string) ([]*gallery.Photo, error) {
 	var out []*gallery.Photo
 	for rows.Next() {
 		p := &gallery.Photo{Color: gallery.LoadingColor}
-		var mtime, taken int64
-		if err := rows.Scan(&p.ID, &p.Rel, &p.Size, &mtime, &taken, &p.Width, &p.Height, &p.Orientation, &p.Favorite); err != nil {
+		var mtime, taken, duration int64
+		if err := rows.Scan(&p.ID, &p.Rel, &p.Size, &mtime, &taken, &p.Width, &p.Height, &p.Orientation, &p.Kind, &duration, &p.HasAudio, &p.HDR, &p.Favorite); err != nil {
 			return nil, err
 		}
 		p.Path = filepath.Join(root, filepath.FromSlash(p.Rel))
 		p.Album = gallery.AlbumOf(p.Rel)
 		p.ModTime = time.Unix(0, mtime)
 		p.Date = time.Unix(0, taken)
+		p.Duration = time.Duration(duration)
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -312,9 +361,10 @@ func (s *Store) SavePhotos(photos []*gallery.Photo) error {
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`INSERT INTO photos (path, size, mtime, taken, width, height, orientation) VALUES (?, ?, ?, ?, ?, ?, ?)
+	stmt, err := tx.Prepare(`INSERT INTO photos (path, size, mtime, taken, width, height, orientation, kind, duration, audio, hdr) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(path) DO UPDATE SET size = excluded.size, mtime = excluded.mtime, taken = excluded.taken,
-		width = excluded.width, height = excluded.height, orientation = excluded.orientation
+		width = excluded.width, height = excluded.height, orientation = excluded.orientation,
+		kind = excluded.kind, duration = excluded.duration, audio = excluded.audio, hdr = excluded.hdr
 		RETURNING id`)
 	if err != nil {
 		return err
@@ -322,7 +372,7 @@ func (s *Store) SavePhotos(photos []*gallery.Photo) error {
 	defer stmt.Close()
 
 	for _, p := range photos {
-		if err := stmt.QueryRow(p.Rel, p.Size, p.ModTime.UnixNano(), p.Date.UnixNano(), p.Width, p.Height, p.Orientation).Scan(&p.ID); err != nil {
+		if err := stmt.QueryRow(p.Rel, p.Size, p.ModTime.UnixNano(), p.Date.UnixNano(), p.Width, p.Height, p.Orientation, p.Kind, int64(p.Duration), p.HasAudio, p.HDR).Scan(&p.ID); err != nil {
 			return err
 		}
 	}
@@ -358,4 +408,29 @@ func (s *Store) DeletePhotos(rels []string) error {
 		}
 	}
 	return tx.Commit()
+}
+
+const maxCachedQueries = 5000
+
+func (s *Store) LoadQuery(text string) ([]float32, bool) {
+	var blob []byte
+	if err := s.db.QueryRow(`SELECT vec FROM queries WHERE text = ? AND model = ?`, text, s.model).Scan(&blob); err != nil {
+		return nil, false
+	}
+	vec := decodeVector(blob)
+	if len(vec) != visionDim {
+		return nil, false
+	}
+	s.db.Exec(`UPDATE queries SET used = ? WHERE text = ? AND model = ?`, time.Now().UnixNano(), text, s.model)
+	return vec, true
+}
+
+func (s *Store) SaveQuery(text string, vec []float32) error {
+	if _, err := s.db.Exec(`INSERT INTO queries (text, model, vec, used) VALUES (?, ?, ?, ?)
+		ON CONFLICT(text, model) DO UPDATE SET vec = excluded.vec, used = excluded.used`,
+		text, s.model, encodeVector(vec), time.Now().UnixNano()); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`DELETE FROM queries WHERE used < (SELECT used FROM queries ORDER BY used DESC LIMIT 1 OFFSET ?)`, maxCachedQueries-1)
+	return err
 }

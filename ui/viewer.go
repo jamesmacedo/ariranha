@@ -262,12 +262,12 @@ func (v *Viewer) counterWidth() float32 {
 }
 
 func (v *Viewer) Update(screen rl.Rectangle) {
+	v.full.BeginFrame()
 	if !v.Open || len(v.photos) == 0 {
 		v.Open = false
 		return
 	}
 	dt := rl.GetFrameTime()
-	v.full.BeginFrame()
 
 	switch {
 	case rl.IsKeyPressed(rl.KeyEscape):

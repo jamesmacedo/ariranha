@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ariranha/gallery"
@@ -27,6 +28,7 @@ type Status struct {
 	State      State
 	Reading    bool
 	Paused     bool
+	Loading    bool
 	Discovered int
 	Cataloged  int
 	Indexed    int
@@ -42,6 +44,7 @@ type Result struct {
 	Photos []*gallery.Photo
 	Scores []float32
 	Took   time.Duration
+	Cached bool
 	Err    error
 }
 
@@ -52,6 +55,7 @@ const (
 	spread     = 0.08
 	minScore   = -0.02
 	visionDim  = 768
+	textIdle   = 3 * time.Minute
 )
 
 type Service struct {
@@ -71,8 +75,10 @@ type Service struct {
 	scanMu sync.Mutex
 	scans  map[string]Key
 
-	enc    *Encoder
+	vision *ImageEncoder
 	faces  *FaceEncoder
+	faceOK atomic.Bool
+	text   *TextEncoder
 	index  *Index
 	people *People
 	queue  *photoQueue
@@ -246,12 +252,6 @@ func (s *Service) Close() {
 	close(s.stop)
 	s.queue.Close()
 	s.wg.Wait()
-	if s.enc != nil {
-		s.enc.Close()
-	}
-	if s.faces != nil {
-		s.faces.Close()
-	}
 	if s.store != nil {
 		s.store.Close()
 	}
@@ -421,19 +421,17 @@ func (s *Service) forget(p *gallery.Photo) {
 
 func (s *Service) indexLoop() {
 	defer s.wg.Done()
+	defer s.unloadIndexers()
 
-	enc, err := NewEncoder(s.paths, 0)
-	if err != nil {
+	if err := CheckModels(s.paths); err != nil {
 		s.fail(err)
 		return
 	}
-	s.enc = enc
-
-	faces, err := NewFaceEncoder(s.paths, 0)
-	if err != nil {
+	if err := CheckFaceModels(s.paths); err != nil {
 		s.setStatus(func(st *Status) { st.FaceErr = err })
+	} else {
+		s.faceOK.Store(true)
 	}
-	s.faces = faces
 
 	select {
 	case <-s.catalogReady:
@@ -459,12 +457,19 @@ func (s *Service) indexLoop() {
 	var perPhoto float64
 
 	for {
+		if s.Status().Paused {
+			s.unloadIndexers()
+		}
 		if !s.waitRunning() {
 			return
 		}
 		batch := s.nextBatch()
 		if batch == nil {
 			break
+		}
+		if err := s.loadIndexers(); err != nil {
+			s.fail(err)
+			return
 		}
 		began := time.Now()
 
@@ -492,6 +497,7 @@ func (s *Service) indexLoop() {
 					s.setStatus(func(st *Status) { st.FaceErr = err })
 					s.faces.Close()
 					s.faces = nil
+					s.faceOK.Store(false)
 				}
 			}
 			images[j] = nil
@@ -507,6 +513,7 @@ func (s *Service) indexLoop() {
 		})
 	}
 
+	s.unloadIndexers()
 	if !s.stopped() {
 		s.setStatus(func(st *Status) {
 			st.State = StateReady
@@ -514,6 +521,48 @@ func (s *Service) indexLoop() {
 			st.Remaining = 0
 		})
 	}
+}
+
+func (s *Service) loadIndexers() error {
+	wantFaces := s.faces == nil && s.faceOK.Load()
+	if s.vision != nil && !wantFaces {
+		return nil
+	}
+	s.setStatus(func(st *Status) { st.Loading = true })
+	defer s.setStatus(func(st *Status) { st.Loading = false })
+
+	if s.vision == nil {
+		vision, err := NewImageEncoder(s.paths, 0)
+		if err != nil {
+			return err
+		}
+		s.vision = vision
+	}
+	if wantFaces {
+		faces, err := NewFaceEncoder(s.paths, 0)
+		if err != nil {
+			s.faceOK.Store(false)
+			s.setStatus(func(st *Status) { st.FaceErr = err })
+		} else {
+			s.faces = faces
+		}
+	}
+	return nil
+}
+
+func (s *Service) unloadIndexers() {
+	if s.vision == nil && s.faces == nil {
+		return
+	}
+	if s.vision != nil {
+		s.vision.Close()
+		s.vision = nil
+	}
+	if s.faces != nil {
+		s.faces.Close()
+		s.faces = nil
+	}
+	releaseMemory()
 }
 
 func (s *Service) nextBatch() []*gallery.Photo {
@@ -539,7 +588,7 @@ func (s *Service) loadStored() {
 		}
 	})
 
-	if s.faces == nil {
+	if !s.faceOK.Load() {
 		return
 	}
 	if scans, err := s.store.LoadFaceScans(); err == nil {
@@ -559,7 +608,7 @@ func fresh(p *gallery.Photo, k Key) bool {
 }
 
 func (s *Service) needsFaces(p *gallery.Photo) bool {
-	if s.faces == nil {
+	if !s.faceOK.Load() || p.IsVideo() {
 		return false
 	}
 	s.scanMu.Lock()
@@ -569,6 +618,9 @@ func (s *Service) needsFaces(p *gallery.Photo) bool {
 }
 
 func (s *Service) needs(p *gallery.Photo) bool {
+	if p.IsVideo() {
+		return false
+	}
 	return !s.index.Has(int(p.ID)) || s.needsFaces(p)
 }
 
@@ -602,7 +654,7 @@ func (s *Service) embedBatch(batch []*gallery.Photo, images []*image.RGBA, pixel
 		return nil
 	}
 
-	vecs, err := s.enc.EncodeImages(pixels, len(todo))
+	vecs, err := s.vision.EncodeImages(pixels, len(todo))
 	if err != nil {
 		return err
 	}
@@ -661,12 +713,21 @@ func (s *Service) scanFaces(p *gallery.Photo, img *image.RGBA) error {
 
 func (s *Service) queryLoop() {
 	defer s.wg.Done()
+	defer s.unloadText()
+
+	idle := time.NewTimer(textIdle)
+	idle.Stop()
 	for {
 		select {
 		case <-s.stop:
 			return
+		case <-idle.C:
+			s.unloadText()
 		case q := <-s.queries:
 			r := s.search(q)
+			if s.text != nil {
+				idle.Reset(textIdle)
+			}
 			select {
 			case <-s.results:
 			default:
@@ -676,15 +737,52 @@ func (s *Service) queryLoop() {
 	}
 }
 
+func (s *Service) unloadText() {
+	if s.text != nil {
+		s.text.Close()
+		s.text = nil
+		releaseMemory()
+	}
+}
+
+func NormalizeQuery(q string) string {
+	return strings.Join(strings.Fields(strings.ToLower(q)), " ")
+}
+
+func (s *Service) queryVector(q string) ([]float32, bool, error) {
+	key := NormalizeQuery(q)
+	if s.store != nil {
+		if vec, ok := s.store.LoadQuery(key); ok {
+			return vec, true, nil
+		}
+	}
+	if s.text == nil {
+		text, err := NewTextEncoder(s.paths, 0)
+		if err != nil {
+			return nil, false, err
+		}
+		s.text = text
+	}
+	vec, err := s.text.EncodeText(key)
+	if err != nil {
+		return nil, false, err
+	}
+	if s.store != nil {
+		s.store.SaveQuery(key, vec)
+	}
+	return vec, false, nil
+}
+
 func (s *Service) search(q string) Result {
 	start := time.Now()
 	r := Result{Query: q}
 
-	vec, err := s.enc.EncodeText(q)
+	vec, cached, err := s.queryVector(q)
 	if err != nil {
 		r.Err = err
 		return r
 	}
+	r.Cached = cached
 
 	hits := s.index.Search(vec, maxResults)
 	if len(hits) > 0 {
